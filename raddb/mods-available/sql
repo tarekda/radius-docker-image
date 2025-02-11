@@ -1,0 +1,13 @@
+sql {
+    driver = "rlm_sql_mysql"
+    dialect = "mysql"
+    server = "mysql"
+    port = 3306
+    login = "radius"
+    password = "radiuspassword"
+    radius_db = "radius"
+    max_connections = 5
+    remove_stale_sessions = yes
+    read_groups = yes
+    read_profiles = yes
+}

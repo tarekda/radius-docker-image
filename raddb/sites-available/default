@@ -1,0 +1,108 @@
+server default {
+    listen {
+        type = auth
+        ipaddr = *
+        port = 0
+        limit {
+              max_connections = 16
+              lifetime = 0
+              idle_timeout = 30
+        }
+    }
+
+    authorize {
+        filter_username
+        preprocess
+
+        # Sanitize MAC address (remove separators and lowercase)
+        update request {
+            Calling-Station-Id := "%{tolower:%{stripcolon:%{Calling-Station-Id}}}"
+        }
+
+        # Check if MAC is already bound
+        if (sql:SELECT COUNT(*) FROM user_mac WHERE username = '%{User-Name}') {
+            # Verify MAC matches
+            if (!sql:SELECT mac_address FROM user_mac WHERE username = '%{User-Name}' AND mac_address = '%{Calling-Station-Id}') {
+                reject  # Reject if MAC mismatch
+            }
+        }
+
+        # Check for free night usage
+        if ("%{Time}" >= "%{sql:night_start}" && "%{Time}" <= "%{sql:night_end}") {
+            update control {
+                Daily-Quota-Limit := 0
+            }
+        }
+
+        # Check daily quota and switch to fallback profile if exceeded
+        if ("%{sql:SELECT is_fallback FROM raduserprofile WHERE username = '%{User-Name}'}" == 0) {
+            dailyquota
+            if (!ok) {
+                sql {
+                    UPDATE raduserprofile
+                    SET profile_id = (SELECT id FROM radprofile WHERE profile_name = 'Fallback'),
+                        is_fallback = 1
+                    WHERE username = '%{User-Name}';
+                }
+            }
+        }
+
+        # Add speed limits to the response
+        update reply {
+            Mikrotik-Rate-Limit := "%{sql:SELECT CONCAT(speed_down, 'k/', speed_up, 'k') FROM radprofile p JOIN raduserprofile up ON p.id = up.profile_id WHERE up.username = '%{User-Name}'}"
+        }
+
+        sql
+        pap
+    }
+
+    authenticate {
+        Auth-Type PAP {
+            pap
+        }
+    }
+
+    post-auth {
+        # Bind MAC on first successful login
+        if (reply:Access-Accept && !sql:SELECT COUNT(*) FROM user_mac WHERE username = '%{User-Name}') {
+            sql {
+                INSERT INTO user_mac (username, mac_address)
+                VALUES ('%{User-Name}', '%{Calling-Station-Id}')
+                ON DUPLICATE KEY UPDATE mac_address = '%{Calling-Station-Id}'
+            }
+        }
+
+        # Track daily usage
+        sql {
+            INSERT INTO radusagestats (username, day, usage)
+            VALUES ('%{User-Name}', CURDATE(), '%{Bytes-Total}')
+            ON DUPLICATE KEY UPDATE usage = usage + '%{Bytes-Total}';
+        }
+
+        Post-Auth-Type REJECT {
+            attr_filter.access_reject
+        }
+    }
+
+    preacct {
+        preprocess
+    }
+
+    accounting {
+        sql
+        exec
+    }
+
+    session {
+        sql
+    }
+
+    pre-proxy {
+    }
+
+    post-proxy {
+        Post-Proxy-Type Fail {
+            attr_filter.post-proxy
+        }
+    }
+}
