@@ -1,13 +1,42 @@
 sql {
-    driver = "rlm_sql_mysql"
     dialect = "mysql"
-    server = "mysql"
+    
+    # Make dialect accessible to other modules
+    modules {
+        sql {
+            dialect = "mysql"
+        }
+    }
+
+    driver = "rlm_sql_mysql"
+    server = "172.8.16.4"
     port = 3306
     login = "radius"
-    password = "radiuspassword"
+    password = "password"
     radius_db = "radius"
+    read_clients = yes 
+    client_table = nas
     max_connections = 5
     remove_stale_sessions = yes
     read_groups = yes
     read_profiles = yes
+
+
+    authorize_check_query = "SELECT rc.id, rc.username, rc.attribute, rc.value, rc.op \
+       FROM radcheck rc \
+       JOIN raduserprofile rup ON rc.username = rup.username \
+       WHERE rc.username = '%{User-Name}' \
+       AND (rup.account_status = 'active' OR rup.account_status = 'suspended')"
+
+    authorize_reply_query = "SELECT  up.id, \
+                            up.username, 'Mikrotik-Rate-Limit' AS attribute, CONCAT(speed_up, 'k/', speed_down, 'k') AS value, ':=' AS op \
+                            FROM radprofile p \
+                            JOIN raduserprofile up ON p.id = up.profile_id \
+                            WHERE up.username = '%{User-Name}'"
+
+    #client_query = "SELECT nasname as ipaddr, secret FROM nas WHERE nasname = '%{Packet-Src-IP-Address}'"
+    #client_query = "SELECT nasname, secret FROM nas WHERE nasname = '%{Packet-Src-IP-Address}' LIMIT 1"
+
+    # Add this for debugging
+    logfile = ${logdir}/sqllog.sql
 }

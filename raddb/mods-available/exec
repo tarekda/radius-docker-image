@@ -1,0 +1,57 @@
+exec {
+    wait = yes
+    input_pairs = request
+    shell_escape = yes
+    timeout = 10
+} 
+
+# Test echo script
+exec test_echo {
+    program = "/opt/freeradius/3.0/scripts/echo.sh"
+    input_pairs = request
+    output_pairs = reply
+    shell_escape = yes
+    wait = yes
+}
+
+# Monthly quota reset script
+exec reset_monthly_quota {
+    program = "/opt/freeradius/3.0/scripts/reset_monthly_quota.sh"
+    input_pairs = request
+    output_pairs = reply
+    shell_escape = yes
+    wait = yes
+}
+
+exec fallback_update {
+    wait = yes
+    input_pairs = request
+    output_pairs = reply
+    program = "/opt/freeradius/3.0/scripts/update_fallback.sh %{User-Name}"
+}
+
+# Connection logging script
+exec log_connection {
+    program = "/opt/freeradius/3.0/scripts/log_connection.sh  %{User-Name} %{Calling-Station-Id}  %{NAS-IP-Address} %{Acct-Status-Type}"
+    input_pairs = request
+    shell_escape = yes
+    wait = no
+}
+
+# MAC binding script
+exec bind_mac {
+    program = "/opt/freeradius/3.0/scripts/bind_mac.sh %{User-Name} %{Calling-Station-Id}"
+    input_pairs = request
+    output_pairs = reply
+    shell_escape = yes
+    parse_reply = no
+    wait = yes
+}
+
+# Usage tracking script
+exec track_usage {
+    program = "/opt/freeradius/3.0/scripts/track_usage.sh %{User-Name} %{Calling-Station-Id} %{Acct-Input-Octets} %{Acct-Output-Octets} %{Acct-Session-Time} %{NAS-IP-Address}"
+    input_pairs = request
+    shell_escape = yes
+    wait = no
+}

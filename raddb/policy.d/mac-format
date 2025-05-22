@@ -1,0 +1,23 @@
+# Policy for MAC address formatting
+mac-format {
+    if (&Calling-Station-Id) {
+        update request {
+            # Convert to lowercase
+            &Calling-Station-Id := "%{tolower:%{Calling-Station-Id}}"
+            
+            # Remove colons using string operations
+            &Calling-Station-Id := "%{Calling-Station-Id[0]}\
+%{Calling-Station-Id[1]}\
+%{Calling-Station-Id[3]}\
+%{Calling-Station-Id[4]}\
+%{Calling-Station-Id[6]}\
+%{Calling-Station-Id[7]}\
+%{Calling-Station-Id[9]}\
+%{Calling-Station-Id[10]}\
+%{Calling-Station-Id[12]}\
+%{Calling-Station-Id[13]}\
+%{Calling-Station-Id[15]}\
+%{Calling-Station-Id[16]}"
+        }
+    }
+} 

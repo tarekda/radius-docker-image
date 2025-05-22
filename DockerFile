@@ -1,13 +1,79 @@
 FROM ubuntu:22.04
 
+# Install dependencies, including net-tools (netstat) and grep
 RUN apt-get update && apt-get install -y \
     freeradius \
     freeradius-mysql \
     mysql-client \
+    vim \
+    nano \
+    net-tools \         
+    procps \           
+    iproute2 \         
+    grep \              
     && rm -rf /var/lib/apt/lists/*
 
+# Ensure freerad user exists first
+RUN adduser --system --no-create-home --group freerad || true
+
+# Create necessary directories
+RUN mkdir -p /etc/freeradius/3.0/mods-enabled \
+    /etc/freeradius/3.0/mods-available \
+    /etc/freeradius/3.0/sites-enabled \
+    /etc/freeradius/3.0/sites-available
+
+# Copy configuration files first
+#COPY raddb/radiusd.conf /etc/freeradius/3.0/radiusd.conf
 COPY raddb/ /etc/freeradius/3.0/
 
-EXPOSE 1812/udp 1813/udp
+# Copy custom dictionaries
+COPY raddb/dictionary.dailyquota /etc/freeradius/3.0/dictionary.dailyquota
+COPY raddb/dictionary.custom /etc/freeradius/3.0/dictionary.custom
+#COPY raddb/mods-config/sql/main/mysql/queries.conf /etc/freeradius/3.0/mods-config/sql/main/mysql/queries.conf
+COPY raddb/scripts /opt/freeradius/3.0/scripts
 
-CMD ["freeradius", "-f"]
+# Add includes to main dictionary
+RUN echo '$INCLUDE /etc/freeradius/3.0/dictionary.dailyquota' >> /etc/freeradius/3.0/dictionary && \
+    echo '$INCLUDE /etc/freeradius/3.0/dictionary.custom' >> /etc/freeradius/3.0/dictionary
+
+# Now create the symbolic links
+RUN ln -sf /etc/freeradius/3.0/mods-available/sql /etc/freeradius/3.0/mods-enabled/sql && \
+    ln -sf /etc/freeradius/3.0/mods-config/sql/counter/daily_quota.conf /etc/freeradius/3.0/mods-enabled/dailyquota && \
+    ln -sf /etc/freeradius/3.0/mods-available/pap /etc/freeradius/3.0/mods-enabled/pap && \
+    ln -sf /etc/freeradius/3.0/mods-available/exec /etc/freeradius/3.0/mods-enabled/exec && \
+    ln -sf /etc/freeradius/3.0/mods-available/linelog /etc/freeradius/3.0/mods-enabled/linelog && \
+    ln -sf /etc/freeradius/3.0/mods-available/pap /etc/freeradius/3.0/mods-enabled/
+
+
+# Copy startup script
+COPY start.sh /start.sh
+RUN chmod +x /start.sh
+
+# Set proper permissions
+RUN mkdir -p /var/log/freeradius && \
+    chown -R freerad:freerad /var/log/freeradius && \
+    # Fix permissions on configuration directory
+    chown -R freerad:freerad /etc/freeradius/3.0 && \
+    chmod -R u=rwX,g=rX,o= /etc/freeradius/3.0 && \
+    find /etc/freeradius/3.0 -type d -exec chmod 750 {} \; && \
+    find /etc/freeradius/3.0 -type f -exec chmod 640 {} \; && \
+    chmod 640 /etc/freeradius/3.0/clients.conf && \
+    chmod -R 640 /etc/freeradius/3.0/certs/* && \
+    # Ensure specific directories are accessible
+    chmod 750 /etc/freeradius/3.0/mods-enabled && \
+    chmod 750 /etc/freeradius/3.0/sites-enabled && \
+    chmod 644 /etc/freeradius/3.0/mods-config/sql/main/mysql/queries.conf && \
+    chown freerad:freerad /etc/freeradius/3.0/mods-config/sql/main/mysql/queries.conf
+
+RUN mkdir -p /var/log/freeradius/radacct && \
+    chown -R freerad:freerad /var/log/freeradius/radacct
+
+RUN mkdir -p /etc/freeradius/3.0/certs && \
+    chown -R freerad:freerad /etc/freeradius/3.0/certs
+
+# Expose RADIUS ports
+EXPOSE 1812/udp 1813/udp 1700/udp
+
+# Set entrypoint
+ENTRYPOINT ["/start.sh"]
+CMD ["radiusd", "-X"]

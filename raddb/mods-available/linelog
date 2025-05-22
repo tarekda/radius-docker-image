@@ -1,0 +1,8 @@
+linelog my_debug_log {
+  # Log to the main FreeRADIUS log (e.g., /var/log/radius/radius.log) 
+  # or specify a unique file path if you prefer:
+  filename = /var/log/freeradius/debug_log
+
+  # The 'format' line is what gets logged
+  format = "Src-IP = %{Packet-Src-IP-Address}"
+}

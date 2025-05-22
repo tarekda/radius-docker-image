@@ -1,0 +1,4 @@
+# Custom attributes for daily quota
+ATTRIBUTE Daily-Quota-Limit 3005 integer
+# ATTRIBUTE Daily-Quota 3006 integer
+ATTRIBUTE Max-Daily-Quota 3006 integer 

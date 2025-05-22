@@ -1,8 +1,8 @@
 server default {
     listen {
         type = auth
-        ipaddr = *
-        port = 0
+        ipaddr = 0.0.0.0
+        port = 1812
         limit {
               max_connections = 16
               lifetime = 0
@@ -10,50 +10,85 @@ server default {
         }
     }
 
+    listen {
+        type = acct
+        ipaddr = 0.0.0.0
+        port = 1813
+    }
+
+    listen {
+        type = coa
+        ipaddr = 0.0.0.0
+        port = 1700
+    }
+
     authorize {
+  
         filter_username
         preprocess
-
-        # Sanitize MAC address (remove separators and lowercase)
-        update request {
-            Calling-Station-Id := "%{tolower:%{stripcolon:%{Calling-Station-Id}}}"
-        }
-
-        # Check if MAC is already bound
-        if (sql:SELECT COUNT(*) FROM user_mac WHERE username = '%{User-Name}') {
-            # Verify MAC matches
-            if (!sql:SELECT mac_address FROM user_mac WHERE username = '%{User-Name}' AND mac_address = '%{Calling-Station-Id}') {
-                reject  # Reject if MAC mismatch
-            }
-        }
-
-        # Check for free night usage
-        if ("%{Time}" >= "%{sql:night_start}" && "%{Time}" <= "%{sql:night_end}") {
-            update control {
-                Daily-Quota-Limit := 0
-            }
-        }
-
-        # Check daily quota and switch to fallback profile if exceeded
-        if ("%{sql:SELECT is_fallback FROM raduserprofile WHERE username = '%{User-Name}'}" == 0) {
-            dailyquota
-            if (!ok) {
-                sql {
-                    UPDATE raduserprofile
-                    SET profile_id = (SELECT id FROM radprofile WHERE profile_name = 'Fallback'),
-                        is_fallback = 1
-                    WHERE username = '%{User-Name}';
-                }
-            }
-        }
-
-        # Add speed limits to the response
-        update reply {
-            Mikrotik-Rate-Limit := "%{sql:SELECT CONCAT(speed_down, 'k/', speed_up, 'k') FROM radprofile p JOIN raduserprofile up ON p.id = up.profile_id WHERE up.username = '%{User-Name}'}"
-        }
-
-        sql
+        sql 
         pap
+
+        "%{sql:insert into connection_logs (username, mac_address, nas_ip, status, timestamp) values ('%{User-Name}', '%{Calling-Station-Id}', '%{NAS-IP-Address}', 'attempt', NOW());}"
+        
+        
+        # Check if user is active
+        if ("%{sql:SELECT CASE WHEN account_status = 'active' THEN 1 ELSE 0 END FROM raduserprofile WHERE username = '%{User-Name}'}" == 0) {
+            update reply {
+                Reply-Message := "Account is not active"
+            }
+            reject
+        }
+
+        # Sanitize MAC address
+        mac-format
+
+        # Check if user has any MAC bindings
+        if ("%{sql:SELECT COUNT(*) FROM user_mac WHERE username = '%{User-Name}'}" > 0) {
+            # Check if the Calling-Station-Id (MAC) matches the bound MAC
+            if ("%{sql:SELECT COUNT(*) FROM user_mac WHERE username = '%{User-Name}' AND mac_address = '%{Calling-Station-Id}'}" == 0) {
+                update reply {
+                    Reply-Message := "Unauthorized MAC address. Access Denied."
+                }
+                reject
+            }
+        }
+
+        # Check for rate limiting
+        if ("%{sql:SELECT COUNT(*) FROM connection_logs WHERE mac_address = '%{Calling-Station-Id}' AND status = 'rejected' AND timestamp > DATE_SUB(NOW(), INTERVAL 5 MINUTE)}" > 5) {
+            reject
+        }
+
+        # Block known malicious MACs
+        if ("%{sql:SELECT COUNT(*) FROM blocked_macs WHERE mac_address = '%{Calling-Station-Id}'}" > 0) {
+            reject
+        }
+
+        # Verify allowed time windows
+        #if ("%{sql:SELECT COUNT(*) FROM time_restrictions WHERE username = '%{User-Name}' AND CURRENT_TIME() NOT BETWEEN start_time AND end_time}" > 0) {
+        #    reject
+        #}
+
+        # Add session controls to the response
+        update reply {
+
+            # Session timeout (in seconds) (let keep it dynamic based on midnight)
+            #Session-Timeout := "%{sql:SELECT session_timeout FROM radprofile p JOIN raduserprofile up ON p.id = up.profile_id WHERE up.username = '%{User-Name}'}"
+            
+            # Idle timeout (in seconds)
+            Idle-Timeout := "%{sql:SELECT idle_timeout FROM radprofile p JOIN raduserprofile up ON p.id = up.profile_id WHERE up.username = '%{User-Name}'}"
+            
+            # Maximum number of concurrent sessions
+            Port-Limit := "%{sql:SELECT max_sessions FROM radprofile p JOIN raduserprofile up ON p.id = up.profile_id WHERE up.username = '%{User-Name}'}"
+        }
+
+        # Check for concurrent sessions
+        if ("%{sql:SELECT COUNT(*) FROM radacct WHERE username = '%{User-Name}' AND acctstoptime IS NULL}" > "%{sql:SELECT max_sessions FROM radprofile p JOIN raduserprofile up ON p.id = up.profile_id WHERE up.username = '%{User-Name}'}") {
+            update reply {
+                Reply-Message := "Too many concurrent sessions"
+            }
+            reject
+        }
     }
 
     authenticate {
@@ -61,26 +96,30 @@ server default {
             pap
         }
     }
-
+    
     post-auth {
-        # Bind MAC on first successful login
-        if (reply:Access-Accept && !sql:SELECT COUNT(*) FROM user_mac WHERE username = '%{User-Name}') {
-            sql {
-                INSERT INTO user_mac (username, mac_address)
-                VALUES ('%{User-Name}', '%{Calling-Station-Id}')
-                ON DUPLICATE KEY UPDATE mac_address = '%{Calling-Station-Id}'
-            }
+        # Log successful authentication
+        test_echo
+        my_debug_log
+        # Track connection 
+        "%{sql:insert into connection_logs (username, mac_address, nas_ip, status, acct_status, terminate_cause, timestamp) values ('%{User-Name}', '%{Calling-Station-Id}', '%{NAS-IP-Address}', '%{reply:Packet-Type}', 'start', NULL, NOW());}"
+        
+        
+        # Bind MAC if needed
+        if ("%{sql:SELECT COALESCE(COUNT(*), 0) FROM user_mac WHERE username = '%{User-Name}' AND mac_address = '%{Calling-Station-Id}'}" == 0) {
+            bind_mac
+        }
+       
+        update reply {
+            Reply-Message := "Authentication successful for %{User-Name}"
+             Session-Timeout := "%{exec:/opt/freeradius/3.0/scripts/calculate_timeout.sh}"
         }
 
-        # Track daily usage
-        sql {
-            INSERT INTO radusagestats (username, day, usage)
-            VALUES ('%{User-Name}', CURDATE(), '%{Bytes-Total}')
-            ON DUPLICATE KEY UPDATE usage = usage + '%{Bytes-Total}';
-        }
+        ok
 
         Post-Auth-Type REJECT {
             attr_filter.access_reject
+            log_connection  # Log failed attempts too
         }
     }
 
@@ -89,8 +128,205 @@ server default {
     }
 
     accounting {
+        detail
         sql
         exec
+
+        update control {
+            Free-Night := "0"  # Default value if not set
+        }
+
+        update control {
+            Packet-Src-IP-Address := "%{Packet-Src-IP-Address}"
+        }
+
+
+        # Check for free night usage
+        if ("%{sql:SELECT (CURRENT_TIME BETWEEN night_start AND night_end) AS is_night_mode \
+            FROM settings \
+            WHERE key_attribute = 'Free-Night' \
+            AND if_enabled = '1'}" == 1) {
+           update control {
+               Free-Night := "1"
+           }
+        }
+
+        if (Free-Night != "1") {
+            update reply {
+                Reply-Message := "Debug: Free-Night is not active"
+            }
+        }
+
+        "%{sql:insert into connection_logs (username, mac_address, nas_ip, status, acct_status, terminate_cause, timestamp) \
+        values ('%{User-Name}', '%{Calling-Station-Id}', '%{NAS-IP-Address}', 'accepted', '%{Acct-Status-Type}', '%{Acct-Terminate-Cause}', NOW());}"
+
+        # Track session states
+        if (Acct-Status-Type == Start) {
+            update request {
+                SQL-User-Name := "%{User-Name}"
+                SQL-Acct-Session-Id := "%{Acct-Session-Id}"
+                Event-Timestamp := "%{expr: %l}"
+            }
+            
+            "%{sql: INSERT INTO session_tracking \
+                (session_id, username,mac_address, start_time, status) \
+                VALUES ('%{Acct-Session-Id}', '%{SQL-User-Name}','%{Calling-Station-Id}',NOW(), 'active')}"
+
+            "%{sql:INSERT INTO radusagestats (username, day, data_usage) \
+               VALUES ('%{User-Name}', CURDATE(),0) \
+                ON DUPLICATE KEY UPDATE data_usage = data_usage}"
+
+            #"%{sql: INSERT INTO radusagestats (username, day, data_usage, last_input, last_output, session_start_input, session_start_output) \
+            #    VALUES ('%{User-Name}', CURDATE(), 0, COALESCE(NULLIF('%{Acct-Input-Octets}', ''), '0'), COALESCE(NULLIF('%{Acct-Output-Octets}', ''), '0'), \
+            #            COALESCE(NULLIF('%{Acct-Input-Octets}', ''), '0'), COALESCE(NULLIF('%{Acct-Output-Octets}', ''), '0')) \
+            #    ON DUPLICATE KEY UPDATE \
+            #        last_input = COALESCE(NULLIF('%{Acct-Input-Octets}', ''), '0'),\
+            #        last_output = COALESCE(NULLIF('%{Acct-Output-Octets}', ''), '0'), \
+            #        session_start_input = COALESCE(NULLIF('%{Acct-Input-Octets}', ''), '0'), \
+            #        session_start_output = COALESCE(NULLIF('%{Acct-Output-Octets}', ''), '0')}"
+
+
+
+            sql
+            ok
+        }
+        elsif (Acct-Status-Type == Stop) {
+
+                "%{sql: UPDATE session_tracking \
+                SET end_time = NOW(), \
+                    status = 'completed', \
+                    bytes_in = '%{%{Acct-Input-Octets}:-0}', \
+                    bytes_out = '%{%{Acct-Output-Octets}:-0}', \
+                    session_time = '%{%{Acct-Session-Time}:-0}', \
+                    daily_bytes_in = '%{%{Acct-Input-Octets}:-0}', \
+                    daily_bytes_out = '%{%{Acct-Output-Octets}:-0}', \
+                    daily_session_time = '%{%{Acct-Session-Time}:-0}' \
+                WHERE session_id = '%{Acct-Session-Id}' \
+                AND username = '%{User-Name}'}"
+
+                # Retrieve the baseline from the database:
+                update request {
+                    #Tmp-Delta-Total := "%{expr: %{Tmp-Delta-Input} + %{Tmp-Delta-Output}}"
+                    # Retrieve the current daily usage and add the delta:
+                    #Tmp-Daily-Usage := "%{sql:SELECT COALESCE(data_usage, 0) FROM radusagestats WHERE username = '%{User-Name}' AND day = CURDATE()}"
+                    Tmp-New-Daily   := "%{sql:SELECT SUM(bytes_in + bytes_out) AS total_usage \
+                                            FROM session_tracking \
+                                            WHERE username = '%{User-Name}' \
+                                            AND DATE(start_time) = CURDATE() \
+                                            AND DATE(end_time) = CURDATE()}"
+                }
+
+                update reply {
+                    Reply-Message := "Stop: FinalDaily=%{Tmp-New-Daily}"
+                }
+          
+                if ("%{control:Free-Night}"!= "1") {
+                        "%{sql:UPDATE radusagestats SET data_usage = '%{Tmp-New-Daily}' \
+                        WHERE username = '%{User-Name}' AND day = CURDATE()}"
+                    }
+                track_usage
+                sql
+        }
+        elsif (Acct-Status-Type == Interim-Update) {
+
+            update request {
+                Acct-Status-Type      := "Alive"
+                SQL-User-Name         := "%{User-Name}"
+                SQL-Acct-Session-Id   := "%{Acct-Session-Id}"
+            }
+
+            "%{sql: UPDATE session_tracking \
+                    SET                         \
+                        bytes_in = '%{%{Acct-Input-Octets}:-0}', \
+                        bytes_out = '%{%{Acct-Output-Octets}:-0}', \
+                        session_time = '%{%{Acct-Session-Time}:-0}', \
+                        daily_bytes_in = '%{%{Acct-Input-Octets}:-0}', \
+                        daily_bytes_out = '%{%{Acct-Output-Octets}:-0}', \
+                        daily_session_time = '%{%{Acct-Session-Time}:-0}' \
+                    WHERE session_id = '%{Acct-Session-Id}' \
+                    AND status = 'active' \
+                    AND username = '%{User-Name}'}"
+
+
+            update request {
+                    #Tmp-Delta-Total := "%{expr: %{Tmp-Delta-Input} + %{Tmp-Delta-Output}}"
+                    # Retrieve the current daily usage and add the delta:
+                    #Tmp-Daily-Usage := "%{sql:SELECT COALESCE(data_usage, 0) FROM radusagestats WHERE username = '%{User-Name}' AND day = CURDATE()}"
+                    Tmp-New-Daily   := "%{sql:SELECT SUM(bytes_in + bytes_out) AS total_usage \
+                                        FROM session_tracking \
+                                        WHERE username = '%{User-Name}' \
+                                        AND DATE(start_time) = CURDATE() \
+                                        AND (DATE(end_time) = CURDATE() OR end_time IS NULL)}"
+            }
+
+            update reply {
+                Reply-Message := "Stop: FinalDaily=%{Tmp-New-Daily}"
+            }
+
+            if ("%{control:Free-Night}"!= "1") {
+                    "%{sql:UPDATE radusagestats SET data_usage = '%{Tmp-New-Daily}' \
+                    WHERE username = '%{User-Name}' AND day = CURDATE()}"
+            }
+            sql
+            
+            
+            update reply {
+                Reply-Message := "Tmp-Daily-Usage=%{Tmp-Daily-Usage}, Tmp-New-Daily=%{Tmp-New-Daily},Tmp-Delta-Total:%{Tmp-Delta-Total}"
+            }
+
+
+            # Check if user has exceeded their monthly quota
+            update request {
+                Tmp-Integer-0 := "%{sql:SELECT \
+                                    IF(COALESCE(SUM(data_usage), 0) > \
+                                        (SELECT p.monthly_quota \
+                                        FROM raduserprofile up \
+                                        JOIN radprofile p ON p.id = up.profile_id \
+                                        WHERE up.username = '%{User-Name}'), 1, 0) \
+                                    FROM radusagestats \
+                                    WHERE username = '%{User-Name}' \
+                                    AND day >= DATE_FORMAT(NOW(), CONCAT('%Y-%m-',LPAD((SELECT up.quota_reset_day FROM raduserprofile up WHERE up.username = '%{User-Name}'), 2, '0'))) }"
+            }
+
+            # Check if user has exceeded their daily quota
+            update request {
+                Tmp-Integer-1 := "%{sql:SELECT \
+                                    IF(COALESCE(SUM(data_usage), 0) > \
+                                        (SELECT p.daily_quota \
+                                        FROM raduserprofile up \
+                                        JOIN radprofile p ON p.id = up.profile_id \
+                                        WHERE up.username = '%{User-Name}'), 1, 0) \
+                                    FROM radusagestats \
+                                    WHERE username = '%{User-Name}' \
+                                    AND day = CURDATE() }"
+            }
+
+            # Debug message to check the value of Tmp-Integer-0
+            #if ("%{Tmp-Integer-0}") {
+            #  update reply {
+            #       Reply-Message := "Debug: Tmp-Integer-0 = %{Tmp-Integer-0}"
+            #   }
+             # }
+
+            # if ("%{Tmp-Integer-1}") {
+                #    update reply {
+                    #  Reply-Message := "Debug: Tmp-Integer-1 = %{Tmp-Integer-1}"
+                #    }
+            #}
+
+            # Apply rate limit if user exceeded quota
+            if (Tmp-Integer-0 == "1" || Tmp-Integer-1 == "1") {
+                update reply {
+                    Mikrotik-Rate-Limit := "%{sql:SELECT CONCAT(speed_up, 'k/', speed_down, 'k') \
+                                            FROM radprofile \
+                                            WHERE profile_name = 'Fallback'}"
+                }
+                # Update the raduserprofile table to set is_fallback to true
+                # Call the exec module to update raduserprofile
+                fallback_update
+            }
+        }
+
     }
 
     session {
