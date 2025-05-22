@@ -76,4 +76,5 @@ EXPOSE 1812/udp 1813/udp 1700/udp
 
 # Set entrypoint
 ENTRYPOINT ["/start.sh"]
-CMD ["radiusd", "-X"]
+CMD []
+#CMD ["radiusd", "-X"]

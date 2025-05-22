@@ -10,4 +10,4 @@ done
 echo "MySQL is ready"
 
 # Start FreeRADIUS in debug mode
-/usr/sbin/freeradius -X
+/usr/sbin/freeradius -f
