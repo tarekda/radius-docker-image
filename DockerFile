@@ -40,6 +40,8 @@ RUN echo '$INCLUDE /etc/freeradius/3.0/dictionary.dailyquota' >> /etc/freeradius
 RUN ln -sf /etc/freeradius/3.0/mods-available/sql /etc/freeradius/3.0/mods-enabled/sql && \
     ln -sf /etc/freeradius/3.0/mods-config/sql/counter/daily_quota.conf /etc/freeradius/3.0/mods-enabled/dailyquota && \
     ln -sf /etc/freeradius/3.0/mods-available/pap /etc/freeradius/3.0/mods-enabled/pap && \
+    ln -sf /etc/freeradius/3.0/mods-available/chap /etc/freeradius/3.0/mods-enabled/chap && \
+    ln -sf /etc/freeradius/3.0/mods-available/mschap /etc/freeradius/3.0/mods-enabled/mschap && \
     ln -sf /etc/freeradius/3.0/mods-available/exec /etc/freeradius/3.0/mods-enabled/exec && \
     ln -sf /etc/freeradius/3.0/mods-available/linelog /etc/freeradius/3.0/mods-enabled/linelog && \
     ln -sf /etc/freeradius/3.0/mods-available/pap /etc/freeradius/3.0/mods-enabled/

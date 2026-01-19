@@ -26,10 +26,12 @@ server default {
   
         filter_username
         preprocess
-        sql 
+        chap
+        mschap
+        sql
         pap
 
-        "%{sql:insert into connection_logs (username, mac_address, nas_ip, status, timestamp) values ('%{User-Name}', '%{Calling-Station-Id}', '%{NAS-IP-Address}', 'attempt', NOW());}"
+        "%{sql:insert into connection_logs (username, mac_address, nas_ip, status, reply_message, timestamp) values ('%{User-Name}', '%{Calling-Station-Id}', '%{NAS-IP-Address}', 'attempt', NULL, NOW());}"
         
         
         # Check if user is active
@@ -54,13 +56,23 @@ server default {
             }
         }
 
-        # Check for rate limiting
-        if ("%{sql:SELECT COUNT(*) FROM connection_logs WHERE mac_address = '%{Calling-Station-Id}' AND status = 'rejected' AND timestamp > DATE_SUB(NOW(), INTERVAL 5 MINUTE)}" > 5) {
+        # Rate limiting (protect against brute-force / buggy retry loops).
+        # NOTE: keep this threshold high enough to avoid blocking legitimate users when the NAS retries quickly.
+        if ("%{sql:SELECT COUNT(*) FROM connection_logs WHERE mac_address = '%{Calling-Station-Id}' AND status = 'rejected' AND timestamp > DATE_SUB(NOW(), INTERVAL 5 MINUTE)}" > 50) {
+            update request {
+                Tmp-Integer-7 := 1
+            }
+            update reply {
+                Reply-Message := "Rate limited: too many failed attempts"
+            }
             reject
         }
 
         # Block known malicious MACs
         if ("%{sql:SELECT COUNT(*) FROM blocked_macs WHERE mac_address = '%{Calling-Station-Id}'}" > 0) {
+            update reply {
+                Reply-Message := "Blocked MAC address"
+            }
             reject
         }
 
@@ -82,8 +94,9 @@ server default {
             Port-Limit := "%{sql:SELECT max_sessions FROM radprofile p JOIN raduserprofile up ON p.id = up.profile_id WHERE up.username = '%{User-Name}'}"
         }
 
-        # Check for concurrent sessions
-        if ("%{sql:SELECT COUNT(*) FROM radacct WHERE username = '%{User-Name}' AND acctstoptime IS NULL}" > "%{sql:SELECT max_sessions FROM radprofile p JOIN raduserprofile up ON p.id = up.profile_id WHERE up.username = '%{User-Name}'}") {
+        # Check for concurrent sessions (ignore stale sessions).
+        # A session is considered "active" only if it has an update within the last 10 minutes.
+        if ("%{sql:SELECT COUNT(*) FROM radacct WHERE username = '%{User-Name}' AND acctstoptime IS NULL AND COALESCE(acctupdatetime, acctstarttime) >= DATE_SUB(NOW(), INTERVAL 10 MINUTE)}" > "%{sql:SELECT max_sessions FROM radprofile p JOIN raduserprofile up ON p.id = up.profile_id WHERE up.username = '%{User-Name}'}") {
             update reply {
                 Reply-Message := "Too many concurrent sessions"
             }
@@ -95,14 +108,21 @@ server default {
         Auth-Type PAP {
             pap
         }
+        Auth-Type CHAP {
+            chap
+        }
+        Auth-Type MS-CHAP {
+            mschap
+        }
     }
     
     post-auth {
         # Log successful authentication
         test_echo
         my_debug_log
-        # Track connection 
-        "%{sql:insert into connection_logs (username, mac_address, nas_ip, status, acct_status, terminate_cause, timestamp) values ('%{User-Name}', '%{Calling-Station-Id}', '%{NAS-IP-Address}', '%{reply:Packet-Type}', 'start', NULL, NOW());}"
+        # Track auth success (status enum is accepted/rejected/attempt/...)
+        "%{sql:insert into connection_logs (username, mac_address, nas_ip, status, acct_status, terminate_cause, reply_message, timestamp) \
+          values ('%{User-Name}', '%{Calling-Station-Id}', '%{NAS-IP-Address}', 'accepted', NULL, NULL, '%{%{reply:Reply-Message}:-}', NOW());}"
         
         
         # Bind MAC if needed
@@ -118,8 +138,15 @@ server default {
         ok
 
         Post-Auth-Type REJECT {
+            # Track auth failure (avoid exec script mismatch / schema drift)
+            # If we rate-limited the request, don't insert "rejected" again or the lockout becomes self-sustaining.
+            if (!&Tmp-Integer-7) {
+                "%{sql:insert into connection_logs (username, mac_address, nas_ip, status, acct_status, terminate_cause, reply_message, timestamp) \
+                  values ('%{User-Name}', '%{Calling-Station-Id}', '%{NAS-IP-Address}', 'rejected', NULL, NULL, \
+                          '%{%{control:Module-Failure-Message}:-%{%{reply:Reply-Message}:-}}', NOW());}"
+            }
+            # Apply standard reject attribute filtering after we logged the reason.
             attr_filter.access_reject
-            log_connection  # Log failed attempts too
         }
     }
 
@@ -151,14 +178,17 @@ server default {
            }
         }
 
-        if (Free-Night != "1") {
+        if (&control:Free-Night != "1") {
             update reply {
                 Reply-Message := "Debug: Free-Night is not active"
             }
         }
 
+        # acct_status column is ENUM('start','stop','update') in your schema.
         "%{sql:insert into connection_logs (username, mac_address, nas_ip, status, acct_status, terminate_cause, timestamp) \
-        values ('%{User-Name}', '%{Calling-Station-Id}', '%{NAS-IP-Address}', 'accepted', '%{Acct-Status-Type}', '%{Acct-Terminate-Cause}', NOW());}"
+        values ('%{User-Name}', '%{Calling-Station-Id}', '%{NAS-IP-Address}', 'accepted', \
+                CASE '%{Acct-Status-Type}' WHEN 'Start' THEN 'start' WHEN 'Stop' THEN 'stop' ELSE 'update' END, \
+                NULL, NOW());}"
 
         # Track session states
         if (Acct-Status-Type == Start) {
@@ -168,13 +198,43 @@ server default {
                 Event-Timestamp := "%{expr: %l}"
             }
             
+            # Initialize counters on Start so the first Interim-Update doesn't over-count.
             "%{sql: INSERT INTO session_tracking \
-                (session_id, username,mac_address, start_time, status) \
-                VALUES ('%{Acct-Session-Id}', '%{SQL-User-Name}','%{Calling-Station-Id}',NOW(), 'active')}"
+                (session_id, username, mac_address, start_time, last_update, status, nas_ip, framed_ip, bytes_in, bytes_out, session_time) \
+                VALUES ( \
+                  '%{Acct-Session-Id}', '%{SQL-User-Name}', '%{Calling-Station-Id}', NOW(), NOW(), 'active', \
+                  '%{NAS-IP-Address}', '%{Framed-IP-Address}', \
+                  ((%{%{Acct-Input-Gigawords}:-0} * 4294967296) + %{%{Acct-Input-Octets}:-0}), \
+                  ((%{%{Acct-Output-Gigawords}:-0} * 4294967296) + %{%{Acct-Output-Octets}:-0}), \
+                  %{%{Acct-Session-Time}:-0} \
+                )}"
 
             "%{sql:INSERT INTO radusagestats (username, day, data_usage) \
                VALUES ('%{User-Name}', CURDATE(),0) \
                 ON DUPLICATE KEY UPDATE data_usage = data_usage}"
+
+            #
+            # Populate radacct (source of truth for "online" sessions).
+            # We do this explicitly because the current SQL module config is used mostly
+            # for xlat expansions, and may not automatically write radacct records.
+            #
+            "%{sql:INSERT IGNORE INTO radacct (acctsessionid, acctuniqueid, username, nasipaddress, \
+                    acctstarttime, acctupdatetime, acctstoptime, acctinterval, acctsessiontime, \
+                    acctinputoctets, acctoutputoctets, calledstationid, callingstationid, framedipaddress) \
+                  VALUES ( \
+                    '%{Acct-Session-Id}', \
+                    MD5(CONCAT('%{Acct-Session-Id}','|','%{User-Name}','|','%{NAS-IP-Address}')), \
+                    '%{User-Name}', \
+                    '%{NAS-IP-Address}', \
+                    NOW(), NOW(), NULL, \
+                    0, \
+                    COALESCE(NULLIF('%{Acct-Session-Time}', ''), 0), \
+                    COALESCE(NULLIF('%{Acct-Input-Octets}', ''), 0), \
+                    COALESCE(NULLIF('%{Acct-Output-Octets}', ''), 0), \
+                    '%{Called-Station-Id}', \
+                    '%{Calling-Station-Id}', \
+                    '%{Framed-IP-Address}' \
+                  )}"
 
             #"%{sql: INSERT INTO radusagestats (username, day, data_usage, last_input, last_output, session_start_input, session_start_output) \
             #    VALUES ('%{User-Name}', CURDATE(), 0, COALESCE(NULLIF('%{Acct-Input-Octets}', ''), '0'), COALESCE(NULLIF('%{Acct-Output-Octets}', ''), '0'), \
@@ -192,38 +252,77 @@ server default {
         }
         elsif (Acct-Status-Type == Stop) {
 
+                # Ensure today's row exists
+                "%{sql:INSERT INTO radusagestats (username, day, data_usage) \
+                      VALUES ('%{User-Name}', CURDATE(), 0) \
+                      ON DUPLICATE KEY UPDATE data_usage = data_usage}"
+
+                # Increment daily usage by delta since last update (handles sessions spanning midnight).
+                # Uses Gigawords to avoid 32-bit counter wrap.
+                if (&control:Free-Night != "1") {
+                    "%{sql:UPDATE radusagestats r \
+                          JOIN session_tracking st \
+                            ON st.username = r.username \
+                           AND st.session_id = '%{Acct-Session-Id}' \
+                          SET r.data_usage = r.data_usage \
+                              + GREATEST(((%{%{Acct-Input-Gigawords}:-0} * 4294967296) + %{%{Acct-Input-Octets}:-0}) - st.bytes_in, 0) \
+                              + GREATEST(((%{%{Acct-Output-Gigawords}:-0} * 4294967296) + %{%{Acct-Output-Octets}:-0}) - st.bytes_out, 0) \
+                          WHERE r.username = '%{User-Name}' \
+                            AND r.day = CURDATE()}"
+                }
+
+                # Persist latest counters + close session
                 "%{sql: UPDATE session_tracking \
-                SET end_time = NOW(), \
-                    status = 'completed', \
-                    bytes_in = '%{%{Acct-Input-Octets}:-0}', \
-                    bytes_out = '%{%{Acct-Output-Octets}:-0}', \
-                    session_time = '%{%{Acct-Session-Time}:-0}', \
-                    daily_bytes_in = '%{%{Acct-Input-Octets}:-0}', \
-                    daily_bytes_out = '%{%{Acct-Output-Octets}:-0}', \
-                    daily_session_time = '%{%{Acct-Session-Time}:-0}' \
-                WHERE session_id = '%{Acct-Session-Id}' \
-                AND username = '%{User-Name}'}"
+                       SET end_time = NOW(), \
+                           last_update = NOW(), \
+                           status = 'completed', \
+                           bytes_in = ((%{%{Acct-Input-Gigawords}:-0} * 4294967296) + %{%{Acct-Input-Octets}:-0}), \
+                           bytes_out = ((%{%{Acct-Output-Gigawords}:-0} * 4294967296) + %{%{Acct-Output-Octets}:-0}), \
+                           session_time = %{%{Acct-Session-Time}:-0} \
+                     WHERE session_id = '%{Acct-Session-Id}' \
+                       AND username = '%{User-Name}'}"
 
-                # Retrieve the baseline from the database:
-                update request {
-                    #Tmp-Delta-Total := "%{expr: %{Tmp-Delta-Input} + %{Tmp-Delta-Output}}"
-                    # Retrieve the current daily usage and add the delta:
-                    #Tmp-Daily-Usage := "%{sql:SELECT COALESCE(data_usage, 0) FROM radusagestats WHERE username = '%{User-Name}' AND day = CURDATE()}"
-                    Tmp-New-Daily   := "%{sql:SELECT SUM(bytes_in + bytes_out) AS total_usage \
-                                            FROM session_tracking \
-                                            WHERE username = '%{User-Name}' \
-                                            AND DATE(start_time) = CURDATE() \
-                                            AND DATE(end_time) = CURDATE()}"
-                }
+                # Close radacct row
+                # (If start packet was missed, create the row before closing it.)
+                "%{sql:INSERT INTO radacct (acctsessionid, acctuniqueid, username, nasipaddress, \
+                        acctstarttime, acctupdatetime, acctstoptime, acctinterval, acctsessiontime, \
+                        acctinputoctets, acctoutputoctets, calledstationid, callingstationid, framedipaddress) \
+                      SELECT \
+                        '%{Acct-Session-Id}', \
+                        MD5(CONCAT('%{Acct-Session-Id}','|','%{User-Name}','|','%{NAS-IP-Address}')), \
+                        '%{User-Name}', \
+                        '%{NAS-IP-Address}', \
+                        NOW(), NOW(), NULL, \
+                        0, \
+                        COALESCE(NULLIF('%{Acct-Session-Time}', ''), 0), \
+                        COALESCE(NULLIF('%{Acct-Input-Octets}', ''), 0), \
+                        COALESCE(NULLIF('%{Acct-Output-Octets}', ''), 0), \
+                        '%{Called-Station-Id}', \
+                        '%{Calling-Station-Id}', \
+                        '%{Framed-IP-Address}' \
+                      WHERE NOT EXISTS ( \
+                        SELECT 1 FROM radacct \
+                        WHERE acctsessionid = '%{Acct-Session-Id}' \
+                          AND username = '%{User-Name}' \
+                          AND nasipaddress = '%{NAS-IP-Address}' \
+                          AND acctstoptime IS NULL \
+                      )}"
+                "%{sql:UPDATE radacct SET \
+                        acctstoptime = NOW(), \
+                        acctupdatetime = NOW(), \
+                        acctinterval = 0, \
+                        acctsessiontime = COALESCE(NULLIF('%{Acct-Session-Time}', ''), 0), \
+                        acctinputoctets = COALESCE(NULLIF('%{Acct-Input-Octets}', ''), 0), \
+                        acctoutputoctets = COALESCE(NULLIF('%{Acct-Output-Octets}', ''), 0), \
+                        calledstationid = '%{Called-Station-Id}', \
+                        callingstationid = '%{Calling-Station-Id}', \
+                        framedipaddress = '%{Framed-IP-Address}', \
+                        acctterminatecause = '%{Acct-Terminate-Cause}' \
+                      WHERE acctsessionid = '%{Acct-Session-Id}' \
+                        AND username = '%{User-Name}' \
+                        AND nasipaddress = '%{NAS-IP-Address}' \
+                        AND acctstoptime IS NULL}"
 
-                update reply {
-                    Reply-Message := "Stop: FinalDaily=%{Tmp-New-Daily}"
-                }
-          
-                if ("%{control:Free-Night}"!= "1") {
-                        "%{sql:UPDATE radusagestats SET data_usage = '%{Tmp-New-Daily}' \
-                        WHERE username = '%{User-Name}' AND day = CURDATE()}"
-                    }
                 track_usage
                 sql
         }
@@ -235,44 +334,75 @@ server default {
                 SQL-Acct-Session-Id   := "%{Acct-Session-Id}"
             }
 
+            # Ensure today's row exists
+            "%{sql:INSERT INTO radusagestats (username, day, data_usage) \
+                  VALUES ('%{User-Name}', CURDATE(), 0) \
+                  ON DUPLICATE KEY UPDATE data_usage = data_usage}"
+
+            # Increment daily usage by delta since last update (handles sessions spanning midnight).
+            # Uses Gigawords to avoid 32-bit counter wrap.
+            if (&control:Free-Night != "1") {
+                "%{sql:UPDATE radusagestats r \
+                      JOIN session_tracking st \
+                        ON st.username = r.username \
+                       AND st.session_id = '%{Acct-Session-Id}' \
+                      SET r.data_usage = r.data_usage \
+                          + GREATEST(((%{%{Acct-Input-Gigawords}:-0} * 4294967296) + %{%{Acct-Input-Octets}:-0}) - st.bytes_in, 0) \
+                          + GREATEST(((%{%{Acct-Output-Gigawords}:-0} * 4294967296) + %{%{Acct-Output-Octets}:-0}) - st.bytes_out, 0) \
+                      WHERE r.username = '%{User-Name}' \
+                        AND r.day = CURDATE()}"
+            }
+
+            # Persist latest counters
             "%{sql: UPDATE session_tracking \
-                    SET                         \
-                        bytes_in = '%{%{Acct-Input-Octets}:-0}', \
-                        bytes_out = '%{%{Acct-Output-Octets}:-0}', \
-                        session_time = '%{%{Acct-Session-Time}:-0}', \
-                        daily_bytes_in = '%{%{Acct-Input-Octets}:-0}', \
-                        daily_bytes_out = '%{%{Acct-Output-Octets}:-0}', \
-                        daily_session_time = '%{%{Acct-Session-Time}:-0}' \
-                    WHERE session_id = '%{Acct-Session-Id}' \
-                    AND status = 'active' \
-                    AND username = '%{User-Name}'}"
+                   SET last_update = NOW(), \
+                       bytes_in = ((%{%{Acct-Input-Gigawords}:-0} * 4294967296) + %{%{Acct-Input-Octets}:-0}), \
+                       bytes_out = ((%{%{Acct-Output-Gigawords}:-0} * 4294967296) + %{%{Acct-Output-Octets}:-0}), \
+                       session_time = %{%{Acct-Session-Time}:-0} \
+                 WHERE session_id = '%{Acct-Session-Id}' \
+                   AND status = 'active' \
+                   AND username = '%{User-Name}'}"
 
+            # Update radacct row
+            # (If start packet was missed, create the row here.)
+            "%{sql:INSERT INTO radacct (acctsessionid, acctuniqueid, username, nasipaddress, \
+                    acctstarttime, acctupdatetime, acctstoptime, acctinterval, acctsessiontime, \
+                    acctinputoctets, acctoutputoctets, calledstationid, callingstationid, framedipaddress) \
+                  SELECT \
+                    '%{Acct-Session-Id}', \
+                    MD5(CONCAT('%{Acct-Session-Id}','|','%{User-Name}','|','%{NAS-IP-Address}')), \
+                    '%{User-Name}', \
+                    '%{NAS-IP-Address}', \
+                    NOW(), NOW(), NULL, \
+                    0, \
+                    COALESCE(NULLIF('%{Acct-Session-Time}', ''), 0), \
+                    COALESCE(NULLIF('%{Acct-Input-Octets}', ''), 0), \
+                    COALESCE(NULLIF('%{Acct-Output-Octets}', ''), 0), \
+                    '%{Called-Station-Id}', \
+                    '%{Calling-Station-Id}', \
+                    '%{Framed-IP-Address}' \
+                  WHERE NOT EXISTS ( \
+                    SELECT 1 FROM radacct \
+                    WHERE acctsessionid = '%{Acct-Session-Id}' \
+                      AND username = '%{User-Name}' \
+                      AND nasipaddress = '%{NAS-IP-Address}' \
+                      AND acctstoptime IS NULL \
+                  )}"
+            "%{sql:UPDATE radacct SET \
+                    acctupdatetime = NOW(), \
+                    acctinterval = 0, \
+                    acctsessiontime = COALESCE(NULLIF('%{Acct-Session-Time}', ''), 0), \
+                    acctinputoctets = COALESCE(NULLIF('%{Acct-Input-Octets}', ''), 0), \
+                    acctoutputoctets = COALESCE(NULLIF('%{Acct-Output-Octets}', ''), 0), \
+                    calledstationid = '%{Called-Station-Id}', \
+                    callingstationid = '%{Calling-Station-Id}', \
+                    framedipaddress = '%{Framed-IP-Address}' \
+                  WHERE acctsessionid = '%{Acct-Session-Id}' \
+                    AND username = '%{User-Name}' \
+                    AND nasipaddress = '%{NAS-IP-Address}' \
+                    AND acctstoptime IS NULL}"
 
-            update request {
-                    #Tmp-Delta-Total := "%{expr: %{Tmp-Delta-Input} + %{Tmp-Delta-Output}}"
-                    # Retrieve the current daily usage and add the delta:
-                    #Tmp-Daily-Usage := "%{sql:SELECT COALESCE(data_usage, 0) FROM radusagestats WHERE username = '%{User-Name}' AND day = CURDATE()}"
-                    Tmp-New-Daily   := "%{sql:SELECT SUM(bytes_in + bytes_out) AS total_usage \
-                                        FROM session_tracking \
-                                        WHERE username = '%{User-Name}' \
-                                        AND DATE(start_time) = CURDATE() \
-                                        AND (DATE(end_time) = CURDATE() OR end_time IS NULL)}"
-            }
-
-            update reply {
-                Reply-Message := "Stop: FinalDaily=%{Tmp-New-Daily}"
-            }
-
-            if ("%{control:Free-Night}"!= "1") {
-                    "%{sql:UPDATE radusagestats SET data_usage = '%{Tmp-New-Daily}' \
-                    WHERE username = '%{User-Name}' AND day = CURDATE()}"
-            }
             sql
-            
-            
-            update reply {
-                Reply-Message := "Tmp-Daily-Usage=%{Tmp-Daily-Usage}, Tmp-New-Daily=%{Tmp-New-Daily},Tmp-Delta-Total:%{Tmp-Delta-Total}"
-            }
 
 
             # Check if user has exceeded their monthly quota

@@ -9,5 +9,13 @@ done
 
 echo "MySQL is ready"
 
-# Start FreeRADIUS in debug mode
-/usr/sbin/freeradius -f
+# Start FreeRADIUS.
+# - Default: foreground + log to stdout (so Promtail/Loki can collect logs)
+# - Debug: set FREERADIUS_DEBUG=1 to run verbose (-X)
+if [ "${FREERADIUS_DEBUG:-0}" = "1" ]; then
+  echo "Starting FreeRADIUS in DEBUG mode (-X)"
+  exec /usr/sbin/freeradius -X
+else
+  echo "Starting FreeRADIUS (foreground, stdout logging)"
+  exec /usr/sbin/freeradius -f -l stdout
+fi

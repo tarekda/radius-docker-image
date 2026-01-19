@@ -177,37 +177,11 @@ END //
 DELIMITER ;
 
 
-CREATE EVENT reset_daily_usage
-ON SCHEDULE EVERY 1 DAY 
-STARTS TIMESTAMP(CURDATE() + INTERVAL 1 DAY) 
-DO 
-BEGIN
-    -- Aggregate all users' daily usage before reset
-    INSERT INTO radusagestats (username, day, data_usage, last_input, last_output)
-    SELECT 
-        username, CURDATE(),
-        SUM(bytes_in + bytes_out) AS total_usage,
-        SUM(bytes_in) AS total_input,
-        SUM(bytes_out) AS total_output
-    FROM session_tracking
-    WHERE start_time >= CURDATE()
-    GROUP BY username
-    ON DUPLICATE KEY UPDATE 
-        data_usage = data_usage + VALUES(data_usage),
-        last_input = last_input + VALUES(last_input),
-        last_output = last_output + VALUES(last_output);
-
-    -- Reset session tracking stats for active sessions
-    UPDATE session_tracking 
-    SET 
-        daily_bytes_in = bytes_in,
-        daily_bytes_out = bytes_out,
-        daily_session_time = session_time,
-        bytes_in = 0,
-        bytes_out = 0,
-        session_time = 0,
-        last_update = NOW()
-    WHERE status = 'active';
-END $$
+-- NOTE:
+-- We intentionally do NOT create a "reset_daily_usage" event.
+-- Daily usage should be accumulated from accounting Interim-Update/Stop deltas
+-- into `radusagestats` (see `raddb/sites-available/default`).
+-- The old midnight reset logic would double-count and/or miscount sessions
+-- (especially sessions spanning midnight).
 
 DELIMITER ;

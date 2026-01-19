@@ -9,16 +9,17 @@ sql {
     }
 
     driver = "rlm_sql_mysql"
-    server = "172.8.16.4"
-    port = 3306
-    login = "radius"
-    password = "password"
-    radius_db = "radius"
+    # Use container environment variables (set via docker-compose.yml)
+    server = "$ENV{SQL_SERVER}"
+    port = "$ENV{SQL_PORT}"
+    login = "$ENV{SQL_USER}"
+    password = "$ENV{SQL_PASSWORD}"
+    radius_db = "$ENV{SQL_DATABASE}"
     read_clients = yes 
     client_table = nas
     max_connections = 5
     remove_stale_sessions = yes
-    read_groups = yes
+    read_groups = no
     read_profiles = yes
 
 
@@ -28,15 +29,66 @@ sql {
        WHERE rc.username = '%{User-Name}' \
        AND (rup.account_status = 'active' OR rup.account_status = 'suspended')"
 
-    authorize_reply_query = "SELECT  up.id, \
-                            up.username, 'Mikrotik-Rate-Limit' AS attribute, CONCAT(speed_up, 'k/', speed_down, 'k') AS value, ':=' AS op \
-                            FROM radprofile p \
-                            JOIN raduserprofile up ON p.id = up.profile_id \
+    # Return Mikrotik-Rate-Limit based on the user's profile.
+    # If the user is in fallback (or over quota), return the "Fallback" profile speed.
+    authorize_reply_query = "SELECT up.id, \
+                            up.username, 'Mikrotik-Rate-Limit' AS attribute, \
+                            CONCAT( \
+                              (CASE \
+                                WHEN ( \
+                                  up.is_fallback = 1 OR up.is_monthly_exceeded = 1 OR \
+                                  (SELECT COALESCE(SUM(r1.data_usage), 0) FROM radusagestats r1 WHERE r1.username = up.username AND r1.day = CURDATE()) > p.daily_quota OR \
+                                  (SELECT COALESCE(SUM(r2.data_usage), 0) FROM radusagestats r2 \
+                                     WHERE r2.username = up.username \
+                                       AND r2.day >= ( \
+                                         SELECT CASE \
+                                           WHEN DAY(NOW()) >= up2.quota_reset_day \
+                                             THEN DATE(CONCAT(YEAR(NOW()), '-', LPAD(MONTH(NOW()), 2, '0'), '-', LPAD(up2.quota_reset_day, 2, '0'))) \
+                                           ELSE DATE(CONCAT(YEAR(DATE_SUB(NOW(), INTERVAL 1 MONTH)), '-', LPAD(MONTH(DATE_SUB(NOW(), INTERVAL 1 MONTH)), 2, '0'), '-', LPAD(up2.quota_reset_day, 2, '0'))) \
+                                         END \
+                                         FROM raduserprofile up2 WHERE up2.username = up.username \
+                                       ) \
+                                   ) > p.monthly_quota \
+                                ) \
+                                THEN COALESCE(fb.speed_down, p.speed_down) \
+                                ELSE p.speed_down \
+                              END), \
+                              'k/', \
+                              (CASE \
+                                WHEN ( \
+                                  up.is_fallback = 1 OR up.is_monthly_exceeded = 1 OR \
+                                  (SELECT COALESCE(SUM(r1.data_usage), 0) FROM radusagestats r1 WHERE r1.username = up.username AND r1.day = CURDATE()) > p.daily_quota OR \
+                                  (SELECT COALESCE(SUM(r2.data_usage), 0) FROM radusagestats r2 \
+                                     WHERE r2.username = up.username \
+                                       AND r2.day >= ( \
+                                         SELECT CASE \
+                                           WHEN DAY(NOW()) >= up2.quota_reset_day \
+                                             THEN DATE(CONCAT(YEAR(NOW()), '-', LPAD(MONTH(NOW()), 2, '0'), '-', LPAD(up2.quota_reset_day, 2, '0'))) \
+                                           ELSE DATE(CONCAT(YEAR(DATE_SUB(NOW(), INTERVAL 1 MONTH)), '-', LPAD(MONTH(DATE_SUB(NOW(), INTERVAL 1 MONTH)), 2, '0'), '-', LPAD(up2.quota_reset_day, 2, '0'))) \
+                                         END \
+                                         FROM raduserprofile up2 WHERE up2.username = up.username \
+                                       ) \
+                                   ) > p.monthly_quota \
+                                ) \
+                                THEN COALESCE(fb.speed_up, p.speed_up) \
+                                ELSE p.speed_up \
+                              END), \
+                              'k' \
+                            ) AS value, ':=' AS op \
+                            FROM raduserprofile up \
+                            JOIN radprofile p ON p.id = up.profile_id \
+                            LEFT JOIN radprofile fb ON fb.profile_name = 'Fallback' \
                             WHERE up.username = '%{User-Name}'"
 
     #client_query = "SELECT nasname as ipaddr, secret FROM nas WHERE nasname = '%{Packet-Src-IP-Address}'"
     #client_query = "SELECT nasname, secret FROM nas WHERE nasname = '%{Packet-Src-IP-Address}' LIMIT 1"
 
-    # Add this for debugging
-    logfile = ${logdir}/sqllog.sql
+    # SQL query logging (VERY noisy). Enable only when debugging.
+    # logfile = ${logdir}/sqllog.sql
+
+    #
+    # Load the SQL queries for this dialect (authorize/accounting/post-auth/etc).
+    # Without this, accounting records (radacct) will NOT be written.
+    #
+    $INCLUDE ${modconfdir}/sql/main/${dialect}/queries.conf
 }
