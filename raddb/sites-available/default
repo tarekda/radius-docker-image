@@ -96,7 +96,8 @@ server default {
 
         # Check for concurrent sessions (ignore stale sessions).
         # A session is considered "active" only if it has an update within the last 10 minutes.
-        if ("%{sql:SELECT COUNT(*) FROM radacct WHERE username = '%{User-Name}' AND acctstoptime IS NULL AND COALESCE(acctupdatetime, acctstarttime) >= DATE_SUB(NOW(), INTERVAL 10 MINUTE)}" > "%{sql:SELECT max_sessions FROM radprofile p JOIN raduserprofile up ON p.id = up.profile_id WHERE up.username = '%{User-Name}'}") {
+        # IMPORTANT: use >= so max_sessions=1 blocks a 2nd active session.
+        if ("%{sql:SELECT COUNT(*) FROM radacct WHERE username = '%{User-Name}' AND acctstoptime IS NULL AND COALESCE(acctupdatetime, acctstarttime) >= DATE_SUB(NOW(), INTERVAL 10 MINUTE)}" >= "%{sql:SELECT max_sessions FROM radprofile p JOIN raduserprofile up ON p.id = up.profile_id WHERE up.username = '%{User-Name}'}") {
             update reply {
                 Reply-Message := "Too many concurrent sessions"
             }
@@ -431,6 +432,14 @@ server default {
                                     AND day = CURDATE() }"
             }
 
+            # Is the user already marked as fallback? (avoid re-sending CoA on every Interim-Update)
+            update request {
+                Tmp-Integer-2 := "%{sql:SELECT COALESCE(is_fallback,0) \
+                                    FROM raduserprofile \
+                                    WHERE username = '%{User-Name}' \
+                                    LIMIT 1}"
+            }
+
             # Debug message to check the value of Tmp-Integer-0
             #if ("%{Tmp-Integer-0}") {
             #  update reply {
@@ -451,9 +460,11 @@ server default {
                                             FROM radprofile \
                                             WHERE profile_name = 'Fallback'}"
                 }
-                # Update the raduserprofile table to set is_fallback to true
-                # Call the exec module to update raduserprofile
-                fallback_update
+                # Mark fallback + send CoA once, so the active session immediately switches to fallback rate.
+                if (Tmp-Integer-2 == "0") {
+                    fallback_update
+                    coa_rate_limit
+                }
             }
         }
 

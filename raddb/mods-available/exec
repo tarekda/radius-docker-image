@@ -55,3 +55,14 @@ exec track_usage {
     shell_escape = yes
     wait = no
 }
+
+# Send CoA to apply fallback Mikrotik-Rate-Limit mid-session
+exec coa_rate_limit {
+    # Run synchronously, but do not parse any output.
+    # (FreeRADIUS cannot read output_pairs when wait = no.)
+    wait = yes
+    input_pairs = request
+    shell_escape = yes
+    parse_reply = no
+    program = "/opt/freeradius/3.0/scripts/coa_rate_limit.sh %{User-Name} %{Acct-Session-Id} %{NAS-IP-Address} %{Framed-IP-Address}"
+}

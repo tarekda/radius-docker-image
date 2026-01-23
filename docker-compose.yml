@@ -2,12 +2,19 @@ services:
   freeradius:
     build: .
     environment:
-      SQL_SERVER: 172.8.16.4  # MySQL server IP
-      SQL_USER: radius
-      SQL_PASSWORD: password
-      SQL_PORT: 3306
-      SQL_DATABASE: radius
-      FREERADIUS_DEBUG: "0"
+      # Set TZ so "00:00" matches your local time (set TZ in your shell/.env if needed)
+      TZ: ${TZ:-UTC}
+      # MySQL connection (defaults preserved)
+      SQL_SERVER: ${SQL_SERVER:-172.8.16.4}
+      SQL_USER: ${SQL_USER:-radius}
+      SQL_PASSWORD: ${SQL_PASSWORD:-password}
+      SQL_PORT: ${SQL_PORT:-3306}
+      SQL_DATABASE: ${SQL_DATABASE:-radius}
+
+      # Debug / scheduled reset (defaults preserved)
+      FREERADIUS_DEBUG: ${FREERADIUS_DEBUG:-0}
+      DAILY_RESET_ENABLED: ${DAILY_RESET_ENABLED:-1}
+      DAILY_RESET_AT: ${DAILY_RESET_AT:-00:00}
     volumes:
       - ./logs:/var/log/freeradius
     ports:

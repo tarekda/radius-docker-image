@@ -31,6 +31,12 @@ COPY raddb/dictionary.dailyquota /etc/freeradius/3.0/dictionary.dailyquota
 COPY raddb/dictionary.custom /etc/freeradius/3.0/dictionary.custom
 #COPY raddb/mods-config/sql/main/mysql/queries.conf /etc/freeradius/3.0/mods-config/sql/main/mysql/queries.conf
 COPY raddb/scripts /opt/freeradius/3.0/scripts
+# Normalize Windows CRLF line endings (otherwise scripts fail with "/bin/bash^M: not found").
+RUN for f in /opt/freeradius/3.0/scripts/*.sh; do \
+      [ -f "$f" ] || continue; \
+      tr -d '\r' < "$f" > "${f}.tmp" && mv "${f}.tmp" "$f"; \
+    done || true
+RUN chmod +x /opt/freeradius/3.0/scripts/*.sh || true
 
 # Add includes to main dictionary
 RUN echo '$INCLUDE /etc/freeradius/3.0/dictionary.dailyquota' >> /etc/freeradius/3.0/dictionary && \
