@@ -1,8 +1,31 @@
-linelog my_debug_log {
-  # Log to the main FreeRADIUS log (e.g., /var/log/radius/radius.log) 
-  # or specify a unique file path if you prefer:
-  filename = /var/log/freeradius/debug_log
+#
+# FreeRADIUS linelog instances (Grafana/Loki friendly)
+#
+# These write compact, parseable key=value lines to files under /var/log/freeradius/.
+# In production you can mount that directory to your host and have Promtail scrape it
+# into Loki (Grafana Explore).
+#
 
-  # The 'format' line is what gets logged
+linelog radius_request_log {
+  filename = /var/log/freeradius/requests.log
+  permissions = 0640
+  format = "event=request code=%{Packet-Type} user=%{User-Name} mac=%{Calling-Station-Id} nas=%{NAS-IP-Address} src=%{Packet-Src-IP-Address}"
+}
+
+linelog radius_reply_log {
+  filename = /var/log/freeradius/replies.log
+  permissions = 0640
+  format = "event=reply code=%{Packet-Type} user=%{User-Name} nas=%{NAS-IP-Address} reply=%{%{reply:Reply-Message}:-}"
+}
+
+linelog radius_accounting_log {
+  filename = /var/log/freeradius/accounting.log
+  permissions = 0640
+  format = "event=acct type=%{Acct-Status-Type} user=%{User-Name} mac=%{Calling-Station-Id} nas=%{NAS-IP-Address} in=%{%{Acct-Input-Octets}:-0} out=%{%{Acct-Output-Octets}:-0} sess=%{%{Acct-Session-Time}:-0}"
+}
+
+# Legacy debug (kept but unused by default)
+linelog my_debug_log {
+  filename = /var/log/freeradius/debug_log
   format = "Src-IP = %{Packet-Src-IP-Address}"
 }

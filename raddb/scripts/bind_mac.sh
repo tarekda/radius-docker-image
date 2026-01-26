@@ -1,13 +1,19 @@
 #!/bin/bash
+set -euo pipefail
 
-USERNAME="$1"
-MAC_ADDRESS="$2"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1091
+. "${SCRIPT_DIR}/lib.sh"
 
-RADIUS_DB_HOST="${SQL_SERVER:-host.docker.internal}"
-RADIUS_DB_USER="${SQL_USER:-radius}"
-RADIUS_DB_PASSWORD="${SQL_PASSWORD:-password}"
-RADIUS_DB_NAME="${SQL_DATABASE:-radius}"
-RADIUS_DB_PORT="${SQL_PORT:-3306}"
+USERNAME="${1:-}"
+MAC_ADDRESS="${2:-}"
 
-mysql -h "$RADIUS_DB_HOST" -P "$RADIUS_DB_PORT" -u "$RADIUS_DB_USER" -p"$RADIUS_DB_PASSWORD" "$RADIUS_DB_NAME" -e "INSERT INTO user_mac (username, mac_address) VALUES ('$USERNAME', '$MAC_ADDRESS');"
+if [ -z "$USERNAME" ] || [ -z "$MAC_ADDRESS" ]; then
+  exit 0
+fi
+
+u="$(sql_escape "$USERNAME")"
+m="$(sql_escape "$MAC_ADDRESS")"
+
+mysql_exec "INSERT INTO user_mac (username, mac_address) VALUES ('$u', '$m');" || true
 

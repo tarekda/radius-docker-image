@@ -1,11 +1,9 @@
 #!/bin/bash
 set -euo pipefail
 
-RADIUS_DB_HOST="${SQL_SERVER:-host.docker.internal}"
-RADIUS_DB_USER="${SQL_USER:-radius}"
-RADIUS_DB_PASSWORD="${SQL_PASSWORD:-password}"
-RADIUS_DB_NAME="${SQL_DATABASE:-radius}"
-RADIUS_DB_PORT="${SQL_PORT:-3306}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1091
+. "${SCRIPT_DIR}/lib.sh"
 
 echo "[daily-reset] Starting daily quota + fallback reset at $(date -Is)"
 
@@ -13,7 +11,7 @@ echo "[daily-reset] Starting daily quota + fallback reset at $(date -Is)"
 # 2) Clear daily FUP flag (is_fallback) for all users.
 # 3) Monthly reset: for users whose quota_reset_day == today, clear is_monthly_exceeded (and restore default profile if available).
 # NOTE: This does NOT change speeds for already-connected sessions; users will get normal speeds on next re-auth/CoA.
-mysql -h "$RADIUS_DB_HOST" -P "$RADIUS_DB_PORT" -u "$RADIUS_DB_USER" -p"$RADIUS_DB_PASSWORD" -D "$RADIUS_DB_NAME" -e "
+mysql_exec "
   UPDATE raduserprofile
      SET is_fallback = 0;
 
@@ -35,7 +33,7 @@ mysql -h "$RADIUS_DB_HOST" -P "$RADIUS_DB_PORT" -u "$RADIUS_DB_USER" -p"$RADIUS_
   SELECT username, CURDATE(), 0
   FROM raduserprofile
   ON DUPLICATE KEY UPDATE data_usage = 0;
-"
+" || true
 
 echo "[daily-reset] Completed at $(date -Is)"
 

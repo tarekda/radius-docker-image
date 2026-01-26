@@ -1,10 +1,68 @@
 #!/bin/bash
+set -euo pipefail
 
-# Wait for MySQL to be ready
-until mysql -h"$SQL_SERVER" -P"$SQL_PORT" -u"$SQL_USER" -p"$SQL_PASSWORD" -e "SELECT 1;" >/dev/null 2>&1
-do
-    echo "Waiting for MySQL to be ready..."
-    sleep 1
+MYSQL_DEFAULTS_FILE="${MYSQL_DEFAULTS_FILE:-/run/freeradius-mysql.cnf}"
+
+read_secret_file() {
+  local path="$1"
+  if [ -f "$path" ]; then
+    # shellcheck disable=SC2002
+    cat "$path" | tr -d '\r\n'
+  fi
+}
+
+resolve_mysql_password() {
+  # Priority:
+  # 1) SQL_PASSWORD (explicit env)
+  # 2) SQL_PASSWORD_FILE (path to secret)
+  # 3) /run/secrets/sql_password (Docker secret convention)
+  if [ -n "${SQL_PASSWORD:-}" ]; then
+    echo "$SQL_PASSWORD"
+    return 0
+  fi
+  if [ -n "${SQL_PASSWORD_FILE:-}" ]; then
+    read_secret_file "$SQL_PASSWORD_FILE" && return 0
+  fi
+  read_secret_file "/run/secrets/sql_password" && return 0
+  return 1
+}
+
+write_mysql_defaults() {
+  local host="${SQL_SERVER:-}"
+  local port="${SQL_PORT:-3306}"
+  local user="${SQL_USER:-}"
+  local db="${SQL_DATABASE:-radius}"
+  local pass
+  pass="$(resolve_mysql_password)" || pass=""
+
+  if [ -z "$host" ] || [ -z "$user" ] || [ -z "$pass" ]; then
+    echo "FATAL: missing MySQL credentials. Provide SQL_SERVER, SQL_USER and SQL_PASSWORD (or SQL_PASSWORD_FILE / Docker secret)." >&2
+    exit 1
+  fi
+
+  umask 077
+  cat > "$MYSQL_DEFAULTS_FILE" <<EOF
+[client]
+host=${host}
+port=${port}
+user=${user}
+password=${pass}
+database=${db}
+protocol=tcp
+EOF
+  chmod 600 "$MYSQL_DEFAULTS_FILE" || true
+}
+
+write_mysql_defaults
+
+# Allow FreeRADIUS exec scripts (run as freerad) to read DB creds.
+chown freerad:freerad "$MYSQL_DEFAULTS_FILE" >/dev/null 2>&1 || true
+chmod 600 "$MYSQL_DEFAULTS_FILE" >/dev/null 2>&1 || true
+
+# Wait for MySQL to be ready (no password on argv)
+until mysql --defaults-extra-file="$MYSQL_DEFAULTS_FILE" -e "SELECT 1;" >/dev/null 2>&1; do
+  echo "Waiting for MySQL to be ready..."
+  sleep 1
 done
 
 echo "MySQL is ready"
@@ -22,7 +80,7 @@ chmod +x /opt/freeradius/3.0/scripts/*.sh >/dev/null 2>&1 || true
 #   DAILY_RESET_AT=HH:MM (default 00:00)
 if [ "${DAILY_RESET_ENABLED:-1}" = "1" ]; then
   (
-    set -e
+    set -euo pipefail
     AT="${DAILY_RESET_AT:-00:00}"
     echo "Daily reset enabled at ${AT} (TZ=${TZ:-system})"
 

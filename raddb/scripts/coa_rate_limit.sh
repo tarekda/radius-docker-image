@@ -10,6 +10,10 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1091
+. "${SCRIPT_DIR}/lib.sh"
+
 USERNAME="${1:-}"
 SESSION_ID="${2:-}"
 NAS_IP="${3:-}"
@@ -20,18 +24,11 @@ if [ -z "$USERNAME" ] || [ -z "$SESSION_ID" ] || [ -z "$NAS_IP" ]; then
   exit 0
 fi
 
-RADIUS_DB_HOST="${SQL_SERVER:-host.docker.internal}"
-DB_USER="${SQL_USER:-radius}"
-DB_PASS="${SQL_PASSWORD:-password}"
-DB_NAME="${SQL_DATABASE:-radius}"
-DB_PORT="${SQL_PORT:-3306}"
-
-get_one() {
-  mysql -h "$RADIUS_DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" -N -s -e "$1" 2>/dev/null || true
-}
+get_one() { mysql_one "$1"; }
 
 # CoA secret for this NAS
-SECRET="$(get_one "SELECT secret FROM nas WHERE nasname='${NAS_IP}' LIMIT 1;")"
+nas_esc="$(sql_escape "$NAS_IP")"
+SECRET="$(get_one "SELECT secret FROM nas WHERE nasname='${nas_esc}' LIMIT 1;")"
 if [ -z "$SECRET" ]; then
   echo "coa_rate_limit.sh: no secret found in nas table for NAS ${NAS_IP}" >&2
   exit 0

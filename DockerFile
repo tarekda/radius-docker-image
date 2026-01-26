@@ -1,16 +1,15 @@
 FROM ubuntu:22.04
 
-# Install dependencies, including net-tools (netstat) and grep
-RUN apt-get update && apt-get install -y \
+# Install runtime dependencies (keep image minimal for production)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
     freeradius \
     freeradius-mysql \
+    freeradius-utils \
     mysql-client \
-    vim \
-    nano \
-    net-tools \         
-    procps \           
-    iproute2 \         
-    grep \              
+    procps \
+    iproute2 \
+    grep \
     && rm -rf /var/lib/apt/lists/*
 
 # Ensure freerad user exists first

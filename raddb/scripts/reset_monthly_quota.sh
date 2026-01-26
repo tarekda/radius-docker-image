@@ -1,15 +1,15 @@
 #!/bin/bash
+set -euo pipefail
 
-USERNAME=$1
-RADIUS_DB_HOST="${SQL_SERVER:-host.docker.internal}"
-RADIUS_DB_USER="${SQL_USER:-radius}"
-RADIUS_DB_PASSWORD="${SQL_PASSWORD:-password}"
-RADIUS_DB_NAME="${SQL_DATABASE:-radius}"
-RADIUS_DB_PORT="${SQL_PORT:-3306}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1091
+. "${SCRIPT_DIR}/lib.sh"
 
-mysql -h "$RADIUS_DB_HOST" -P "$RADIUS_DB_PORT" -u "$RADIUS_DB_USER" -p"$RADIUS_DB_PASSWORD" -D "$RADIUS_DB_NAME" -e "
-    UPDATE raduserprofile 
-    SET is_monthly_exceeded = 0,
-        profile_id = (SELECT default_profile_id FROM user_default_profiles WHERE username = '$USERNAME')
-    WHERE username = '$USERNAME' AND is_monthly_exceeded = 1;
-" 
+USERNAME="${1:-}"
+if [ -z "$USERNAME" ]; then
+  exit 0
+fi
+
+u="$(sql_escape "$USERNAME")"
+
+mysql_exec "UPDATE raduserprofile SET is_monthly_exceeded = 0, profile_id = (SELECT default_profile_id FROM user_default_profiles WHERE username = '$u') WHERE username = '$u' AND is_monthly_exceeded = 1;" || true

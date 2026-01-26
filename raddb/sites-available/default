@@ -31,6 +31,12 @@ server default {
         sql
         pap
 
+        # Request logging (for Grafana/Loki). Enable with RADIUS_REQUEST_LOG_ENABLED=1
+        # NOTE: use $ENV{...} (config-time substitution). %{env:...} is not available as a core xlat here.
+        if ("$ENV{RADIUS_REQUEST_LOG_ENABLED}" == "1") {
+            radius_request_log
+        }
+
         "%{sql:insert into connection_logs (username, mac_address, nas_ip, status, reply_message, timestamp) values ('%{User-Name}', '%{Calling-Station-Id}', '%{NAS-IP-Address}', 'attempt', NULL, NOW());}"
         
         
@@ -119,11 +125,18 @@ server default {
     
     post-auth {
         # Log successful authentication
-        test_echo
-        my_debug_log
+        # Production note:
+        # Disable noisy debug exec modules by default. Use FREERADIUS_DEBUG=1 (-X) for verbose logs.
+        #test_echo
+        #my_debug_log
         # Track auth success (status enum is accepted/rejected/attempt/...)
         "%{sql:insert into connection_logs (username, mac_address, nas_ip, status, acct_status, terminate_cause, reply_message, timestamp) \
           values ('%{User-Name}', '%{Calling-Station-Id}', '%{NAS-IP-Address}', 'accepted', NULL, NULL, '%{%{reply:Reply-Message}:-}', NOW());}"
+
+        # Reply logging (Access-Accept)
+        if ("$ENV{RADIUS_REQUEST_LOG_ENABLED}" == "1") {
+            radius_reply_log
+        }
         
         
         # Bind MAC if needed
@@ -148,6 +161,11 @@ server default {
             }
             # Apply standard reject attribute filtering after we logged the reason.
             attr_filter.access_reject
+
+            # Reply logging (Access-Reject)
+            if ("$ENV{RADIUS_REQUEST_LOG_ENABLED}" == "1") {
+                radius_reply_log
+            }
         }
     }
 
@@ -156,9 +174,20 @@ server default {
     }
 
     accounting {
-        detail
+        # NOTE (production):
+        # `detail` writes files under ${logdir}/radacct/<NAS-IP>/detail-YYYYMMDD.
+        # On Windows bind-mounts (./logs:/var/log/freeradius) this often becomes non-writable
+        # for the `freerad` user, causing "Failed to create directory ... Permission denied"
+        # and disrupting user sessions. We already persist accounting in MySQL below, so
+        # disable `detail` file writing.
+        #detail
         sql
         exec
+
+        # Accounting logging (Interim-Update/Start/Stop)
+        if ("$ENV{RADIUS_REQUEST_LOG_ENABLED}" == "1") {
+            radius_accounting_log
+        }
 
         update control {
             Free-Night := "0"  # Default value if not set
@@ -180,9 +209,10 @@ server default {
         }
 
         if (&control:Free-Night != "1") {
-            update reply {
-                Reply-Message := "Debug: Free-Night is not active"
-            }
+            # Avoid leaking debug messages to NAS / clients in production.
+            #update reply {
+            #    Reply-Message := "Debug: Free-Night is not active"
+            #}
         }
 
         # acct_status column is ENUM('start','stop','update') in your schema.
@@ -409,7 +439,7 @@ server default {
             # Check if user has exceeded their monthly quota
             update request {
                 Tmp-Integer-0 := "%{sql:SELECT \
-                                    IF(COALESCE(SUM(data_usage), 0) > \
+                                    IF(COALESCE(SUM(data_usage), 0) >= \
                                         (SELECT p.monthly_quota \
                                         FROM raduserprofile up \
                                         JOIN radprofile p ON p.id = up.profile_id \
@@ -422,7 +452,7 @@ server default {
             # Check if user has exceeded their daily quota
             update request {
                 Tmp-Integer-1 := "%{sql:SELECT \
-                                    IF(COALESCE(SUM(data_usage), 0) > \
+                                    IF(COALESCE(SUM(data_usage), 0) >= \
                                         (SELECT p.daily_quota \
                                         FROM raduserprofile up \
                                         JOIN radprofile p ON p.id = up.profile_id \
@@ -456,7 +486,8 @@ server default {
             # Apply rate limit if user exceeded quota
             if (Tmp-Integer-0 == "1" || Tmp-Integer-1 == "1") {
                 update reply {
-                    Mikrotik-Rate-Limit := "%{sql:SELECT CONCAT(speed_up, 'k/', speed_down, 'k') \
+                    # MikroTik format is "download/upload" in kbit/s (e.g., 1024k/512k)
+                    Mikrotik-Rate-Limit := "%{sql:SELECT CONCAT(speed_down, 'k/', speed_up, 'k') \
                                             FROM radprofile \
                                             WHERE profile_name = 'Fallback'}"
                 }

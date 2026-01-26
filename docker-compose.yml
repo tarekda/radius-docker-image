@@ -4,10 +4,13 @@ services:
     environment:
       # Set TZ so "00:00" matches your local time (set TZ in your shell/.env if needed)
       TZ: ${TZ:-UTC}
-      # MySQL connection (defaults preserved)
-      SQL_SERVER: ${SQL_SERVER:-172.8.16.4}
-      SQL_USER: ${SQL_USER:-radius}
-      SQL_PASSWORD: ${SQL_PASSWORD:-password}
+      # MySQL connection (PRODUCTION: do not ship defaults)
+      # - Prefer Docker secrets: set SQL_PASSWORD_FILE=/run/secrets/sql_password and mount that secret.
+      # - Otherwise set SQL_PASSWORD in your deployment environment (never commit it).
+      SQL_SERVER: ${SQL_SERVER:?set SQL_SERVER}
+      SQL_USER: ${SQL_USER:?set SQL_USER}
+      SQL_PASSWORD: ${SQL_PASSWORD:-}
+      SQL_PASSWORD_FILE: ${SQL_PASSWORD_FILE:-}
       SQL_PORT: ${SQL_PORT:-3306}
       SQL_DATABASE: ${SQL_DATABASE:-radius}
 
@@ -15,6 +18,8 @@ services:
       FREERADIUS_DEBUG: ${FREERADIUS_DEBUG:-0}
       DAILY_RESET_ENABLED: ${DAILY_RESET_ENABLED:-1}
       DAILY_RESET_AT: ${DAILY_RESET_AT:-00:00}
+      # Logging for Grafana/Loki (writes /var/log/freeradius/{requests,replies,accounting}.log)
+      RADIUS_REQUEST_LOG_ENABLED: ${RADIUS_REQUEST_LOG_ENABLED:-0}
     volumes:
       - ./logs:/var/log/freeradius
     ports:
@@ -22,4 +27,9 @@ services:
       - "1813:1813/udp"
       - "1700:1700/udp"
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "/usr/sbin/freeradius -C >/dev/null 2>&1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 

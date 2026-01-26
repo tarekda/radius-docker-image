@@ -27,6 +27,7 @@ CREATE TABLE `radprofile` (
   `max_sessions` INT DEFAULT 1,
 
   PRIMARY KEY (`id`)
+  , UNIQUE KEY `uq_radprofile_profile_name` (`profile_name`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 
@@ -54,13 +55,10 @@ CREATE TABLE radusagestats (
     UNIQUE KEY (username, day)
 ) ENGINE = InnoDB;
 
-ALTER TABLE radusagestats
-    ADD COLUMN last_input BIGINT NOT NULL DEFAULT 0,
-    ADD COLUMN last_output BIGINT NOT NULL DEFAULT 0;
-    
-ALTER TABLE radusagestats
-  ADD COLUMN session_start_input BIGINT NOT NULL DEFAULT 0,
-  ADD COLUMN session_start_output BIGINT NOT NULL DEFAULT 0;
+-- NOTE:
+-- Keep init scripts compatible with the MySQL docker-entrypoint behavior:
+-- these files run only on first database initialization (empty datadir).
+-- Avoid non-idempotent ALTER TABLE statements here.
 
 
 -- User Details (name, address, phone)
@@ -167,16 +165,23 @@ CREATE TABLE session_tracking (
     bytes_in BIGINT DEFAULT 0,
     bytes_out BIGINT DEFAULT 0,
     session_time INT DEFAULT 0,
+    daily_bytes_in BIGINT DEFAULT 0,
+    daily_bytes_out BIGINT DEFAULT 0,
+    daily_session_time INT DEFAULT 0,
     status ENUM('active', 'completed', 'terminated') NOT NULL,
     INDEX idx_username (username),
     INDEX idx_session (session_id),
     INDEX idx_status (status)
 );
 
-ALTER TABLE session_tracking 
-ADD COLUMN daily_bytes_in BIGINT DEFAULT 0,
-ADD COLUMN daily_bytes_out BIGINT DEFAULT 0,
-ADD COLUMN daily_session_time INT DEFAULT 0;
+-- Default profile mapping (used for restoring profile after reset/upgrades)
+CREATE TABLE IF NOT EXISTS user_default_profiles (
+    username VARCHAR(64) NOT NULL,
+    default_profile_id INT NOT NULL,
+    PRIMARY KEY (username),
+    INDEX idx_udp_default_profile_id (default_profile_id),
+    CONSTRAINT fk_udp_profile FOREIGN KEY (default_profile_id) REFERENCES radprofile(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS nas (
     id INT AUTO_INCREMENT PRIMARY KEY,
@@ -208,10 +213,9 @@ VALUES
     ('Basic', 1073741824, 32212254720, '00:00:00', '06:00:00', 1024, 512),
     ('Fallback', 104857600, 3221225472, '00:00:00', '06:00:00', 256, 128);
 
--- Create Radius User
-CREATE USER IF NOT EXISTS 'radius'@'%' IDENTIFIED BY 'radiuspassword';
-GRANT ALL PRIVILEGES ON radius.* TO 'radius'@'%';
-FLUSH PRIVILEGES;
+-- Production note:
+-- Do NOT create DB users or grant ALL privileges from schema init.
+-- Create the application user via your MySQL provisioning (IaC) with least-privilege grants.
 
 -- Add this stored procedure
 DELIMITER //
