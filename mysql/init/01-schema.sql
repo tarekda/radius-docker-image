@@ -225,10 +225,31 @@ CREATE PROCEDURE sp_handle_quota_exceeded(
     IN p_quota_type VARCHAR(10)
 )
 BEGIN
-    -- Update profile to fallback
-    UPDATE raduserprofile 
-    SET profile_id = (SELECT id FROM radprofile WHERE profile_name = 'Fallback'),
-        is_monthly_exceeded = 1 
+    DECLARE v_fallback_profile_id INT;
+    DECLARE v_current_profile_id INT;
+
+    SELECT id INTO v_fallback_profile_id
+    FROM radprofile
+    WHERE profile_name = 'Fallback'
+    LIMIT 1;
+
+    SELECT profile_id INTO v_current_profile_id
+    FROM raduserprofile
+    WHERE username = p_username
+    LIMIT 1;
+
+    -- Save the user's normal profile for later restore (avoid overwriting with fallback)
+    IF v_current_profile_id IS NOT NULL AND (v_fallback_profile_id IS NULL OR v_current_profile_id <> v_fallback_profile_id) THEN
+        INSERT INTO user_default_profiles (username, default_profile_id)
+        VALUES (p_username, v_current_profile_id)
+        ON DUPLICATE KEY UPDATE default_profile_id = VALUES(default_profile_id);
+    END IF;
+
+    -- Update profile to fallback and set the correct flag (daily vs monthly)
+    UPDATE raduserprofile
+    SET profile_id = v_fallback_profile_id,
+        is_monthly_exceeded = IF(LOWER(p_quota_type) = 'monthly', 1, is_monthly_exceeded),
+        is_fallback = IF(LOWER(p_quota_type) = 'daily', 1, is_fallback)
     WHERE username = p_username;
     
     -- Log the event

@@ -67,8 +67,21 @@ done
 
 echo "MySQL is ready"
 
+ye# Apply container timezone if available (requires tzdata in image).
+if [ -n "${TZ:-}" ] && [ -f "/usr/share/zoneinfo/${TZ}" ]; then
+  ln -snf "/usr/share/zoneinfo/${TZ}" /etc/localtime || true
+  echo "${TZ}" > /etc/timezone || true
+fi
+
 # Ensure scripts are executable (Windows hosts may strip +x during build/copy).
 chmod +x /opt/freeradius/3.0/scripts/*.sh >/dev/null 2>&1 || true
+
+# Ensure new schema objects exist on existing DBs (idempotent).
+/opt/freeradius/3.0/scripts/bootstrap_schema.sh || true
+
+# If we missed midnight while the container was down/restarting, clear stale DAILY fallback flags
+# without wiping today's usage.
+/opt/freeradius/3.0/scripts/clear_stale_daily_fallback.sh || true
 
 # Run a daily reset at 00:00 (container local time).
 # - Resets daily usage rows for today to 0

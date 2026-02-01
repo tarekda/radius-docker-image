@@ -30,6 +30,23 @@ exec fallback_update {
     program = "/opt/freeradius/3.0/scripts/update_fallback.sh %{User-Name}"
 }
 
+# Call MySQL stored procedures to mark quota exceeded and switch profile to Fallback.
+exec quota_daily_exceeded_proc {
+    wait = yes
+    input_pairs = request
+    shell_escape = yes
+    parse_reply = no
+    program = "/opt/freeradius/3.0/scripts/quota_exceeded_proc.sh %{User-Name} daily"
+}
+
+exec quota_monthly_exceeded_proc {
+    wait = yes
+    input_pairs = request
+    shell_escape = yes
+    parse_reply = no
+    program = "/opt/freeradius/3.0/scripts/quota_exceeded_proc.sh %{User-Name} monthly"
+}
+
 # Connection logging script
 exec log_connection {
     program = "/opt/freeradius/3.0/scripts/log_connection.sh  %{User-Name} %{Calling-Station-Id}  %{NAS-IP-Address} %{Acct-Status-Type}"

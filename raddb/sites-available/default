@@ -313,6 +313,52 @@ server default {
                      WHERE session_id = '%{Acct-Session-Id}' \
                        AND username = '%{User-Name}'}"
 
+                #
+                # Real-time quota enforcement on Stop as well (sessions may end before next Interim-Update).
+                # Update DB flags/profile so the next auth and admin UI reflect the correct state.
+                #
+                #
+                # IMPORTANT:
+                # Always compare usage against the user's *default/original* profile quotas,
+                # not the current `raduserprofile.profile_id` (which may already be "Fallback").
+                #
+                update request {
+                    Tmp-Integer-0 := "%{sql:SELECT \
+                                        IF(COALESCE(SUM(data_usage), 0) >= \
+                                            (SELECT COALESCE(dp.monthly_quota, cp.monthly_quota) \
+                                               FROM raduserprofile up \
+                                               JOIN radprofile cp ON cp.id = up.profile_id \
+                                          LEFT JOIN user_default_profiles udp ON udp.username = up.username \
+                                          LEFT JOIN radprofile dp ON dp.id = udp.default_profile_id \
+                                              WHERE up.username = '%{User-Name}' \
+                                              LIMIT 1), 1, 0) \
+                                        FROM radusagestats \
+                                        WHERE username = '%{User-Name}' \
+                                        AND day >= DATE_FORMAT(NOW(), CONCAT('%Y-%m-',LPAD((SELECT up.quota_reset_day FROM raduserprofile up WHERE up.username = '%{User-Name}'), 2, '0'))) }"
+                }
+
+                update request {
+                    Tmp-Integer-1 := "%{sql:SELECT \
+                                        IF(COALESCE(SUM(data_usage), 0) >= \
+                                            (SELECT COALESCE(dp.daily_quota, cp.daily_quota) \
+                                               FROM raduserprofile up \
+                                               JOIN radprofile cp ON cp.id = up.profile_id \
+                                          LEFT JOIN user_default_profiles udp ON udp.username = up.username \
+                                          LEFT JOIN radprofile dp ON dp.id = udp.default_profile_id \
+                                              WHERE up.username = '%{User-Name}' \
+                                              LIMIT 1), 1, 0) \
+                                        FROM radusagestats \
+                                        WHERE username = '%{User-Name}' \
+                                        AND day = CURDATE() }"
+                }
+
+                if (Tmp-Integer-0 == "1") {
+                    quota_monthly_exceeded_proc
+                }
+                elsif (Tmp-Integer-1 == "1") {
+                    quota_daily_exceeded_proc
+                }
+
                 # Close radacct row
                 # (If start packet was missed, create the row before closing it.)
                 "%{sql:INSERT INTO radacct (acctsessionid, acctuniqueid, username, nasipaddress, \
@@ -436,27 +482,33 @@ server default {
             sql
 
 
-            # Check if user has exceeded their monthly quota
+            # Check if user has exceeded their monthly quota (compare against default/original plan quota).
             update request {
                 Tmp-Integer-0 := "%{sql:SELECT \
                                     IF(COALESCE(SUM(data_usage), 0) >= \
-                                        (SELECT p.monthly_quota \
-                                        FROM raduserprofile up \
-                                        JOIN radprofile p ON p.id = up.profile_id \
-                                        WHERE up.username = '%{User-Name}'), 1, 0) \
+                                        (SELECT COALESCE(dp.monthly_quota, cp.monthly_quota) \
+                                           FROM raduserprofile up \
+                                           JOIN radprofile cp ON cp.id = up.profile_id \
+                                      LEFT JOIN user_default_profiles udp ON BINARY udp.username = BINARY up.username \
+                                      LEFT JOIN radprofile dp ON dp.id = udp.default_profile_id \
+                                          WHERE up.username = '%{User-Name}' \
+                                          LIMIT 1), 1, 0) \
                                     FROM radusagestats \
                                     WHERE username = '%{User-Name}' \
                                     AND day >= DATE_FORMAT(NOW(), CONCAT('%Y-%m-',LPAD((SELECT up.quota_reset_day FROM raduserprofile up WHERE up.username = '%{User-Name}'), 2, '0'))) }"
             }
 
-            # Check if user has exceeded their daily quota
+            # Check if user has exceeded their daily quota (compare against default/original plan quota).
             update request {
                 Tmp-Integer-1 := "%{sql:SELECT \
                                     IF(COALESCE(SUM(data_usage), 0) >= \
-                                        (SELECT p.daily_quota \
-                                        FROM raduserprofile up \
-                                        JOIN radprofile p ON p.id = up.profile_id \
-                                        WHERE up.username = '%{User-Name}'), 1, 0) \
+                                        (SELECT COALESCE(dp.daily_quota, cp.daily_quota) \
+                                           FROM raduserprofile up \
+                                           JOIN radprofile cp ON cp.id = up.profile_id \
+                                      LEFT JOIN user_default_profiles udp ON BINARY udp.username = BINARY up.username \
+                                      LEFT JOIN radprofile dp ON dp.id = udp.default_profile_id \
+                                          WHERE up.username = '%{User-Name}' \
+                                          LIMIT 1), 1, 0) \
                                     FROM radusagestats \
                                     WHERE username = '%{User-Name}' \
                                     AND day = CURDATE() }"
@@ -464,7 +516,7 @@ server default {
 
             # Is the user already marked as fallback? (avoid re-sending CoA on every Interim-Update)
             update request {
-                Tmp-Integer-2 := "%{sql:SELECT COALESCE(is_fallback,0) \
+                Tmp-Integer-2 := "%{sql:SELECT IF(COALESCE(is_fallback,0)=1 OR COALESCE(is_monthly_exceeded,0)=1, 1, 0) \
                                     FROM raduserprofile \
                                     WHERE username = '%{User-Name}' \
                                     LIMIT 1}"
@@ -491,9 +543,14 @@ server default {
                                             FROM radprofile \
                                             WHERE profile_name = 'Fallback'}"
                 }
-                # Mark fallback + send CoA once, so the active session immediately switches to fallback rate.
+                # Mark fallback (DB) + send CoA once, so the active session immediately switches to fallback rate.
                 if (Tmp-Integer-2 == "0") {
-                    fallback_update
+                    if (Tmp-Integer-0 == "1") {
+                        quota_monthly_exceeded_proc
+                    }
+                    elsif (Tmp-Integer-1 == "1") {
+                        quota_daily_exceeded_proc
+                    }
                     coa_rate_limit
                 }
             }

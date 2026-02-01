@@ -1,6 +1,7 @@
 FROM ubuntu:22.04
 
 # Install runtime dependencies (keep image minimal for production)
+ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     freeradius \
@@ -9,6 +10,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     mysql-client \
     procps \
     iproute2 \
+    tzdata \
     grep \
     && rm -rf /var/lib/apt/lists/*
 

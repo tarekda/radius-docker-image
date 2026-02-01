@@ -3,7 +3,7 @@ services:
     build: .
     environment:
       # Set TZ so "00:00" matches your local time (set TZ in your shell/.env if needed)
-      TZ: ${TZ:-UTC}
+      TZ: ${TZ:-Asia/Beirut}
       # MySQL connection (PRODUCTION: do not ship defaults)
       # - Prefer Docker secrets: set SQL_PASSWORD_FILE=/run/secrets/sql_password and mount that secret.
       # - Otherwise set SQL_PASSWORD in your deployment environment (never commit it).
@@ -17,7 +17,8 @@ services:
       # Debug / scheduled reset (defaults preserved)
       FREERADIUS_DEBUG: ${FREERADIUS_DEBUG:-0}
       DAILY_RESET_ENABLED: ${DAILY_RESET_ENABLED:-1}
-      DAILY_RESET_AT: ${DAILY_RESET_AT:-00:00}
+      # Force midnight local time (Asia/Beirut)
+      DAILY_RESET_AT: "00:00"
       # Logging for Grafana/Loki (writes /var/log/freeradius/{requests,replies,accounting}.log)
       RADIUS_REQUEST_LOG_ENABLED: ${RADIUS_REQUEST_LOG_ENABLED:-0}
     volumes:

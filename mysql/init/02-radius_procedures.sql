@@ -6,27 +6,32 @@ DELIMITER //
 
 -- Procedure to reset monthly quotas
 CREATE PROCEDURE reset_monthly_quotas()
-BEGIN
+proc: BEGIN
     DECLARE current_day INT;
     SET current_day = DAY(NOW());
+
+    -- Global monthly reset: only run on the 1st day of the month (00:00).
+    IF current_day <> 1 THEN
+        LEAVE proc;
+    END IF;
     
-    -- Reset quotas for users whose reset day matches current day
+    -- Reset quotas for all users who were monthly-exceeded
     UPDATE raduserprofile
     SET is_monthly_exceeded = 0,
+        is_fallback = 0,
         profile_id = (
             SELECT default_profile_id 
             FROM user_default_profiles 
             WHERE user_default_profiles.username = raduserprofile.username
         )
-    WHERE quota_reset_day = current_day
-    AND is_monthly_exceeded = 1;
+    WHERE is_monthly_exceeded = 1;
     
     -- Log reset events
     INSERT INTO quota_logs (username, event_type, quota_type, timestamp, details)
     SELECT username, 'reset', 'monthly', NOW(), 
            CONCAT('Monthly quota reset on day ', current_day)
     FROM raduserprofile
-    WHERE quota_reset_day = current_day;
+    WHERE is_monthly_exceeded = 0;
 END //
 
 -- Procedure to kill active sessions
@@ -108,8 +113,10 @@ GROUP BY username;
 CREATE OR REPLACE VIEW remaining_quota AS
 SELECT 
     u.username,
-    p.monthly_quota as total_quota,
-    p.monthly_quota - COALESCE(SUM(s.data_usage), 0) as remaining_quota,
+    -- Always show quotas based on the user's default/original profile when available,
+    -- not the current profile (which may be "Fallback").
+    COALESCE(p_default.monthly_quota, p.monthly_quota) as total_quota,
+    COALESCE(p_default.monthly_quota, p.monthly_quota) - COALESCE(SUM(s.data_usage), 0) as remaining_quota,
     u.quota_reset_day as reset_day,
     CASE 
         WHEN u.is_monthly_exceeded = 1 THEN 'Exceeded'
@@ -119,6 +126,8 @@ SELECT
     DATE_FORMAT(DATE_ADD(NOW(), INTERVAL 1 MONTH), CONCAT('%Y-%m-', LPAD(u.quota_reset_day, 2, '0'))) as next_reset_date
 FROM raduserprofile u
 JOIN radprofile p ON u.profile_id = p.id
+LEFT JOIN user_default_profiles udp ON BINARY udp.username = BINARY u.username
+LEFT JOIN radprofile p_default ON p_default.id = udp.default_profile_id
 LEFT JOIN radusagestats s ON u.username = s.username
     AND s.day >= DATE_FORMAT(NOW(), 
         CONCAT('%Y-%m-', LPAD(u.quota_reset_day, 2, '0')))
@@ -147,13 +156,25 @@ BEGIN
     DECLARE v_profile_id INT;
     DECLARE v_daily_quota BIGINT;
     DECLARE v_data_usage BIGINT;
+    DECLARE v_fallback_profile_id INT;
 
-    -- Get the user's profile and daily quota
-    SELECT rup.profile_id, rp.daily_quota
+    -- Get the user's current profile and the daily quota from the *default/original* profile.
+    -- IMPORTANT: when a user is already on the "Fallback" profile, we must NOT start
+    -- comparing usage against the fallback quotas, otherwise users can get "stuck" in FUP.
+    SELECT
+        rup.profile_id,
+        COALESCE(rp_default.daily_quota, rp_current.daily_quota)
     INTO v_profile_id, v_daily_quota
     FROM raduserprofile rup
-    JOIN radprofile rp ON rup.profile_id = rp.id
+    JOIN radprofile rp_current ON rup.profile_id = rp_current.id
+    LEFT JOIN user_default_profiles udp ON BINARY udp.username = BINARY rup.username
+    LEFT JOIN radprofile rp_default ON rp_default.id = udp.default_profile_id
     WHERE rup.username = p_username;
+
+    SELECT id INTO v_fallback_profile_id
+    FROM radprofile
+    WHERE profile_name = 'Fallback'
+    LIMIT 1;
 
     -- Get the user's data usage for today
     SELECT COALESCE(SUM(data_usage), 0)
@@ -163,9 +184,17 @@ BEGIN
 
     -- Check if the daily quota is exceeded
     IF v_data_usage >= v_daily_quota THEN
-        -- Update profile to fallback
-        UPDATE raduserprofile 
-        SET profile_id = (SELECT id FROM radprofile WHERE profile_name = 'Fallback')
+        -- Save the user's normal profile for later restore (avoid overwriting with fallback)
+        IF v_profile_id IS NOT NULL AND (v_fallback_profile_id IS NULL OR v_profile_id <> v_fallback_profile_id) THEN
+            INSERT INTO user_default_profiles (username, default_profile_id)
+            VALUES (p_username, v_profile_id)
+            ON DUPLICATE KEY UPDATE default_profile_id = VALUES(default_profile_id);
+        END IF;
+
+        -- Switch to fallback + mark daily FUP flag
+        UPDATE raduserprofile
+        SET profile_id = v_fallback_profile_id,
+            is_fallback = 1
         WHERE username = p_username;
 
         -- Log the event
