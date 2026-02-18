@@ -41,7 +41,7 @@ server default {
         
         
         # Check if user is active
-        if ("%{sql:SELECT CASE WHEN account_status = 'active' THEN 1 ELSE 0 END FROM raduserprofile WHERE username = '%{User-Name}'}" == 0) {
+        if ("%{sql:SELECT CASE WHEN account_status = 'active' THEN 1 ELSE 0 END FROM raduserprofile WHERE username COLLATE utf8mb4_unicode_ci = '%{User-Name}' COLLATE utf8mb4_unicode_ci}" == 0) {
             update reply {
                 Reply-Message := "Account is not active"
             }
@@ -52,9 +52,9 @@ server default {
         mac-format
 
         # Check if user has any MAC bindings
-        if ("%{sql:SELECT COUNT(*) FROM user_mac WHERE username = '%{User-Name}'}" > 0) {
+        if ("%{sql:SELECT COUNT(*) FROM user_mac WHERE username COLLATE utf8mb4_unicode_ci = '%{User-Name}' COLLATE utf8mb4_unicode_ci}" > 0) {
             # Check if the Calling-Station-Id (MAC) matches the bound MAC
-            if ("%{sql:SELECT COUNT(*) FROM user_mac WHERE username = '%{User-Name}' AND mac_address = '%{Calling-Station-Id}'}" == 0) {
+            if ("%{sql:SELECT COUNT(*) FROM user_mac WHERE username COLLATE utf8mb4_unicode_ci = '%{User-Name}' COLLATE utf8mb4_unicode_ci AND mac_address = '%{Calling-Station-Id}'}" == 0) {
                 update reply {
                     Reply-Message := "Unauthorized MAC address. Access Denied."
                 }
@@ -94,16 +94,16 @@ server default {
             #Session-Timeout := "%{sql:SELECT session_timeout FROM radprofile p JOIN raduserprofile up ON p.id = up.profile_id WHERE up.username = '%{User-Name}'}"
             
             # Idle timeout (in seconds)
-            Idle-Timeout := "%{sql:SELECT idle_timeout FROM radprofile p JOIN raduserprofile up ON p.id = up.profile_id WHERE up.username = '%{User-Name}'}"
+            Idle-Timeout := "%{sql:SELECT idle_timeout FROM radprofile p JOIN raduserprofile up ON p.id = up.profile_id WHERE up.username COLLATE utf8mb4_unicode_ci = '%{User-Name}' COLLATE utf8mb4_unicode_ci}"
             
             # Maximum number of concurrent sessions
-            Port-Limit := "%{sql:SELECT max_sessions FROM radprofile p JOIN raduserprofile up ON p.id = up.profile_id WHERE up.username = '%{User-Name}'}"
+            Port-Limit := "%{sql:SELECT max_sessions FROM radprofile p JOIN raduserprofile up ON p.id = up.profile_id WHERE up.username COLLATE utf8mb4_unicode_ci = '%{User-Name}' COLLATE utf8mb4_unicode_ci}"
         }
 
         # Check for concurrent sessions (ignore stale sessions).
         # A session is considered "active" only if it has an update within the last 10 minutes.
         # IMPORTANT: use >= so max_sessions=1 blocks a 2nd active session.
-        if ("%{sql:SELECT COUNT(*) FROM radacct WHERE username = '%{User-Name}' AND acctstoptime IS NULL AND COALESCE(acctupdatetime, acctstarttime) >= DATE_SUB(NOW(), INTERVAL 10 MINUTE)}" >= "%{sql:SELECT max_sessions FROM radprofile p JOIN raduserprofile up ON p.id = up.profile_id WHERE up.username = '%{User-Name}'}") {
+        if ("%{sql:SELECT COUNT(*) FROM radacct WHERE username COLLATE utf8mb4_unicode_ci = '%{User-Name}' COLLATE utf8mb4_unicode_ci AND acctstoptime IS NULL AND COALESCE(acctupdatetime, acctstarttime) >= DATE_SUB(NOW(), INTERVAL 10 MINUTE)}" >= "%{sql:SELECT max_sessions FROM radprofile p JOIN raduserprofile up ON p.id = up.profile_id WHERE up.username COLLATE utf8mb4_unicode_ci = '%{User-Name}' COLLATE utf8mb4_unicode_ci}") {
             update reply {
                 Reply-Message := "Too many concurrent sessions"
             }
@@ -140,7 +140,7 @@ server default {
         
         
         # Bind MAC if needed
-        if ("%{sql:SELECT COALESCE(COUNT(*), 0) FROM user_mac WHERE username = '%{User-Name}' AND mac_address = '%{Calling-Station-Id}'}" == 0) {
+        if ("%{sql:SELECT COALESCE(COUNT(*), 0) FROM user_mac WHERE username COLLATE utf8mb4_unicode_ci = '%{User-Name}' COLLATE utf8mb4_unicode_ci AND mac_address = '%{Calling-Station-Id}'}" == 0) {
             bind_mac
         }
        
@@ -293,12 +293,12 @@ server default {
                 if (&control:Free-Night != "1") {
                     "%{sql:UPDATE radusagestats r \
                           JOIN session_tracking st \
-                            ON st.username = r.username \
+                            ON st.username COLLATE utf8mb4_unicode_ci = r.username COLLATE utf8mb4_unicode_ci \
                            AND st.session_id = '%{Acct-Session-Id}' \
                           SET r.data_usage = r.data_usage \
                               + GREATEST(((%{%{Acct-Input-Gigawords}:-0} * 4294967296) + %{%{Acct-Input-Octets}:-0}) - st.bytes_in, 0) \
                               + GREATEST(((%{%{Acct-Output-Gigawords}:-0} * 4294967296) + %{%{Acct-Output-Octets}:-0}) - st.bytes_out, 0) \
-                          WHERE r.username = '%{User-Name}' \
+                          WHERE r.username COLLATE utf8mb4_unicode_ci = '%{User-Name}' COLLATE utf8mb4_unicode_ci \
                             AND r.day = CURDATE()}"
                 }
 
@@ -311,7 +311,7 @@ server default {
                            bytes_out = ((%{%{Acct-Output-Gigawords}:-0} * 4294967296) + %{%{Acct-Output-Octets}:-0}), \
                            session_time = %{%{Acct-Session-Time}:-0} \
                      WHERE session_id = '%{Acct-Session-Id}' \
-                       AND username = '%{User-Name}'}"
+                       AND username COLLATE utf8mb4_unicode_ci = '%{User-Name}' COLLATE utf8mb4_unicode_ci}"
 
                 #
                 # Real-time quota enforcement on Stop as well (sessions may end before next Interim-Update).
@@ -330,11 +330,11 @@ server default {
                                                JOIN radprofile cp ON cp.id = up.profile_id \
                                           LEFT JOIN user_default_profiles udp ON udp.username = up.username \
                                           LEFT JOIN radprofile dp ON dp.id = udp.default_profile_id \
-                                              WHERE up.username = '%{User-Name}' \
+                                              WHERE up.username COLLATE utf8mb4_unicode_ci = '%{User-Name}' COLLATE utf8mb4_unicode_ci \
                                               LIMIT 1), 1, 0) \
                                         FROM radusagestats \
-                                        WHERE username = '%{User-Name}' \
-                                        AND day >= DATE_FORMAT(NOW(), CONCAT('%Y-%m-',LPAD((SELECT up.quota_reset_day FROM raduserprofile up WHERE up.username = '%{User-Name}'), 2, '0'))) }"
+                                        WHERE username COLLATE utf8mb4_unicode_ci = '%{User-Name}' COLLATE utf8mb4_unicode_ci \
+                                        AND day >= DATE_FORMAT(NOW(), CONCAT('%Y-%m-',LPAD((SELECT up.quota_reset_day FROM raduserprofile up WHERE up.username COLLATE utf8mb4_unicode_ci = '%{User-Name}' COLLATE utf8mb4_unicode_ci), 2, '0'))) }"
                 }
 
                 update request {
@@ -345,10 +345,10 @@ server default {
                                                JOIN radprofile cp ON cp.id = up.profile_id \
                                           LEFT JOIN user_default_profiles udp ON udp.username = up.username \
                                           LEFT JOIN radprofile dp ON dp.id = udp.default_profile_id \
-                                              WHERE up.username = '%{User-Name}' \
+                                              WHERE up.username COLLATE utf8mb4_unicode_ci = '%{User-Name}' COLLATE utf8mb4_unicode_ci \
                                               LIMIT 1), 1, 0) \
                                         FROM radusagestats \
-                                        WHERE username = '%{User-Name}' \
+                                        WHERE username COLLATE utf8mb4_unicode_ci = '%{User-Name}' COLLATE utf8mb4_unicode_ci \
                                         AND day = CURDATE() }"
                 }
 
@@ -495,7 +495,7 @@ server default {
                                           LIMIT 1), 1, 0) \
                                     FROM radusagestats \
                                     WHERE username = '%{User-Name}' \
-                                    AND day >= DATE_FORMAT(NOW(), CONCAT('%Y-%m-',LPAD((SELECT up.quota_reset_day FROM raduserprofile up WHERE up.username = '%{User-Name}'), 2, '0'))) }"
+                                    AND day >= DATE_FORMAT(NOW(), CONCAT('%Y-%m-',LPAD((SELECT up.quota_reset_day FROM raduserprofile up WHERE up.username COLLATE utf8mb4_unicode_ci = '%{User-Name}' COLLATE utf8mb4_unicode_ci), 2, '0'))) }"
             }
 
             # Check if user has exceeded their daily quota (compare against default/original plan quota).
@@ -518,7 +518,7 @@ server default {
             update request {
                 Tmp-Integer-2 := "%{sql:SELECT IF(COALESCE(is_fallback,0)=1 OR COALESCE(is_monthly_exceeded,0)=1, 1, 0) \
                                     FROM raduserprofile \
-                                    WHERE username = '%{User-Name}' \
+                                    WHERE username COLLATE utf8mb4_unicode_ci = '%{User-Name}' COLLATE utf8mb4_unicode_ci \
                                     LIMIT 1}"
             }
 

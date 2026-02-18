@@ -38,8 +38,8 @@ fi
 # Keep the same order as authorize_reply_query (speed_down/speed_up).
 RATE_LIMIT="$(get_one "SELECT CONCAT(speed_down,'k/',speed_up,'k') FROM radprofile WHERE profile_name='Fallback' LIMIT 1;")"
 if [ -z "$RATE_LIMIT" ]; then
-  echo "coa_rate_limit.sh: could not resolve Fallback rate from radprofile; using 256k/128k" >&2
-  RATE_LIMIT="256k/128k"
+  echo "coa_rate_limit.sh: could not resolve Fallback rate from radprofile; using 2048k/2048k" >&2
+  RATE_LIMIT="2048k/2048k"
 fi
 
 PAYLOAD="User-Name = ${USERNAME}

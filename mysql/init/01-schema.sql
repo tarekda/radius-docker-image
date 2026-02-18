@@ -211,7 +211,8 @@ CREATE TABLE quota_logs (
 INSERT INTO radprofile (profile_name, daily_quota, monthly_quota, night_start, night_end, speed_down, speed_up)
 VALUES 
     ('Basic', 1073741824, 32212254720, '00:00:00', '06:00:00', 1024, 512),
-    ('Fallback', 104857600, 3221225472, '00:00:00', '06:00:00', 256, 128);
+    -- FUP / quota fallback profile (Mikrotik-Rate-Limit will use speed_down/speed_up)
+    ('Fallback', 104857600, 3221225472, '00:00:00', '06:00:00', 2048, 2048);
 
 -- Production note:
 -- Do NOT create DB users or grant ALL privileges from schema init.

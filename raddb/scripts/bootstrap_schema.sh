@@ -23,5 +23,18 @@ CREATE TABLE IF NOT EXISTS user_default_profiles (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 " || true
 
+echo "[bootstrap] Ensuring Fallback (FUP) profile speed is 2048k..."
+
+# Make sure the Fallback profile exists, and enforce its speed.
+# - INSERT only matters for fresh DBs without the row.
+# - ON DUPLICATE KEY only updates speeds (doesn't touch quotas/time windows).
+mysql_exec "
+INSERT INTO radprofile (profile_name, daily_quota, monthly_quota, night_start, night_end, speed_down, speed_up)
+VALUES ('Fallback', 104857600, 3221225472, '00:00:00', '06:00:00', 2048, 2048)
+ON DUPLICATE KEY UPDATE
+  speed_down = VALUES(speed_down),
+  speed_up = VALUES(speed_up);
+" || true
+
 echo "[bootstrap] Done."
 

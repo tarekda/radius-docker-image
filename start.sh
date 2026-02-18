@@ -67,7 +67,7 @@ done
 
 echo "MySQL is ready"
 
-ye# Apply container timezone if available (requires tzdata in image).
+# Apply container timezone if available (requires tzdata in image).
 if [ -n "${TZ:-}" ] && [ -f "/usr/share/zoneinfo/${TZ}" ]; then
   ln -snf "/usr/share/zoneinfo/${TZ}" /etc/localtime || true
   echo "${TZ}" > /etc/timezone || true
