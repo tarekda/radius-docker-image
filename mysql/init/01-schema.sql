@@ -36,10 +36,13 @@ CREATE TABLE raduserprofile (
     id INT PRIMARY KEY AUTO_INCREMENT,
     username VARCHAR(64) NOT NULL,
     profile_id INT NOT NULL,
+    freenight TINYINT(1) DEFAULT 0,
     is_fallback TINYINT(1) DEFAULT 0,
     is_monthly_exceeded TINYINT(1) DEFAULT 0,
     quota_reset_day INT DEFAULT 1,
-    account_status VARCHAR(20) DEFAULT 'active' CHECK (account_status IN ('active', 'inactive', 'suspended')),
+    account_status VARCHAR(20) DEFAULT 'active',
+    expires_at DATETIME NULL DEFAULT NULL,
+    expiry_framed_ip VARCHAR(45) NULL DEFAULT NULL,
     FOREIGN KEY (profile_id) REFERENCES radprofile(id),
     CHECK (quota_reset_day BETWEEN 1 AND 31)
 );
@@ -151,6 +154,25 @@ CREATE TABLE detailed_usage (
     nas_ip VARCHAR(15),
     timestamp DATETIME
 );
+
+-- Per-interim usage snapshots for exact rolling-window usage checks
+CREATE TABLE session_usage_snapshots (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    username VARCHAR(64) NOT NULL,
+    session_id VARCHAR(64) NOT NULL,
+    nas_ip VARCHAR(15),
+    framed_ip VARCHAR(15),
+    acct_status ENUM('start', 'interim', 'stop') NOT NULL,
+    bytes_in_total BIGINT NOT NULL DEFAULT 0,
+    bytes_out_total BIGINT NOT NULL DEFAULT 0,
+    delta_bytes_in BIGINT NOT NULL DEFAULT 0,
+    delta_bytes_out BIGINT NOT NULL DEFAULT 0,
+    delta_total BIGINT NOT NULL DEFAULT 0,
+    snapshot_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_sus_user_time (username, snapshot_at),
+    INDEX idx_sus_session_time (session_id, snapshot_at),
+    INDEX idx_sus_nas_time (nas_ip, snapshot_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE session_tracking (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,

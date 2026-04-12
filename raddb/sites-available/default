@@ -40,12 +40,24 @@ server default {
         "%{sql:insert into connection_logs (username, mac_address, nas_ip, status, reply_message, timestamp) values ('%{User-Name}', '%{Calling-Station-Id}', '%{NAS-IP-Address}', 'attempt', NULL, NOW());}"
         
         
-        # Check if user is active
-        if ("%{sql:SELECT CASE WHEN account_status = 'active' THEN 1 ELSE 0 END FROM raduserprofile WHERE username COLLATE utf8mb4_unicode_ci = '%{User-Name}' COLLATE utf8mb4_unicode_ci}" == 0) {
+        # Block suspended / terminated / inactive. "expired" may still authenticate for captive renewal.
+        if ("%{sql:SELECT CASE WHEN account_status IN ('suspended','terminated','inactive') THEN 1 ELSE 0 END FROM raduserprofile WHERE username COLLATE utf8mb4_unicode_ci = '%{User-Name}' COLLATE utf8mb4_unicode_ci LIMIT 1}" == 1) {
             update reply {
                 Reply-Message := "Account is not active"
             }
             reject
+        }
+
+        # Flip active -> expired when past expires_at (server local time = MySQL NOW(); align TZ with radacct).
+        "%{sql:UPDATE raduserprofile SET account_status = 'expired' \
+ WHERE username COLLATE utf8mb4_unicode_ci = '%{User-Name}' COLLATE utf8mb4_unicode_ci \
+              AND account_status = 'active' \
+              AND expires_at IS NOT NULL \
+              AND expires_at < NOW()}"
+
+        # 1 = walled-garden / renewal mode (only when a real expiry exists; NULL expires_at => normal access)
+        update control {
+            Tmp-Integer-8 := "%{sql:SELECT CASE WHEN account_status = 'expired' AND expires_at IS NOT NULL THEN 1 ELSE 0 END FROM raduserprofile WHERE username COLLATE utf8mb4_unicode_ci = '%{User-Name}' COLLATE utf8mb4_unicode_ci LIMIT 1}"
         }
 
         # Sanitize MAC address
@@ -143,10 +155,37 @@ server default {
         if ("%{sql:SELECT COALESCE(COUNT(*), 0) FROM user_mac WHERE username COLLATE utf8mb4_unicode_ci = '%{User-Name}' COLLATE utf8mb4_unicode_ci AND mac_address = '%{Calling-Station-Id}'}" == 0) {
             bind_mac
         }
-       
-        update reply {
-            Reply-Message := "Authentication successful for %{User-Name}"
-             Session-Timeout := "%{exec:/opt/freeradius/3.0/scripts/calculate_timeout.sh}"
+
+        # Expired accounts: minimal pipe + fixed IP + WISPr redirect (hotspot / captive).
+        # Configure EXPIRY_FRAMED_IP + EXPIRY_REDIRECT_URL on the FreeRADIUS container.
+        if (&control:Tmp-Integer-8 == 1) {
+            update control {
+                Tmp-String-9 := "%{sql:SELECT NULLIF(TRIM(expiry_framed_ip), '') FROM raduserprofile WHERE username COLLATE utf8mb4_unicode_ci = '%{User-Name}' COLLATE utf8mb4_unicode_ci LIMIT 1}"
+            }
+            if ("%{control:Tmp-String-9}" =~ /^$/) {
+                update reply {
+                    Reply-Message := "Account expired; renew to restore service"
+                    Session-Timeout := "28800"
+                    Framed-IP-Address := "$ENV{EXPIRY_FRAMED_IP}"
+                    Mikrotik-Rate-Limit := "128k/128k"
+                    WISPr-Redirection-URL := "$ENV{EXPIRY_REDIRECT_URL}?u=%{User-Name}"
+                }
+            }
+            else {
+                update reply {
+                    Reply-Message := "Account expired; renew to restore service"
+                    Session-Timeout := "28800"
+                    Framed-IP-Address := "%{control:Tmp-String-9}"
+                    Mikrotik-Rate-Limit := "128k/128k"
+                    WISPr-Redirection-URL := "$ENV{EXPIRY_REDIRECT_URL}?u=%{User-Name}"
+                }
+            }
+        }
+        else {
+            update reply {
+                Reply-Message := "Authentication successful for %{User-Name}"
+                Session-Timeout := "%{exec:/opt/freeradius/3.0/scripts/calculate_timeout.sh}"
+            }
         }
 
         ok
@@ -198,11 +237,20 @@ server default {
         }
 
 
-        # Check for free night usage
-        if ("%{sql:SELECT (CURRENT_TIME BETWEEN night_start AND night_end) AS is_night_mode \
-            FROM settings \
-            WHERE key_attribute = 'Free-Night' \
-            AND if_enabled = '1'}" == 1) {
+        # Check for free night usage.
+        # Free-Night is active only when:
+        # 1) global Free-Night window is enabled in settings, and
+        # 2) this user has freenight=1 in raduserprofile.
+        if ("%{sql:SELECT CASE WHEN EXISTS ( \
+                SELECT 1 \
+                FROM settings s \
+                JOIN raduserprofile up \
+                  ON up.username COLLATE utf8mb4_unicode_ci = '%{User-Name}' COLLATE utf8mb4_unicode_ci \
+                WHERE s.key_attribute = 'Free-Night' \
+                  AND s.if_enabled = '1' \
+                  AND COALESCE(up.freenight, 0) = 1 \
+                  AND CURRENT_TIME BETWEEN s.night_start AND s.night_end \
+            ) THEN 1 ELSE 0 END}" == 1) {
            update control {
                Free-Night := "1"
            }
@@ -238,6 +286,16 @@ server default {
                   ((%{%{Acct-Input-Gigawords}:-0} * 4294967296) + %{%{Acct-Input-Octets}:-0}), \
                   ((%{%{Acct-Output-Gigawords}:-0} * 4294967296) + %{%{Acct-Output-Octets}:-0}), \
                   %{%{Acct-Session-Time}:-0} \
+                )}"
+
+            # Snapshot absolute counters at session start (baseline for rolling-window usage checks).
+            "%{sql:INSERT INTO session_usage_snapshots \
+                (username, session_id, nas_ip, framed_ip, acct_status, bytes_in_total, bytes_out_total, delta_bytes_in, delta_bytes_out, delta_total, snapshot_at) \
+                VALUES ( \
+                  '%{User-Name}', '%{Acct-Session-Id}', '%{NAS-IP-Address}', '%{Framed-IP-Address}', 'start', \
+                  ((%{%{Acct-Input-Gigawords}:-0} * 4294967296) + %{%{Acct-Input-Octets}:-0}), \
+                  ((%{%{Acct-Output-Gigawords}:-0} * 4294967296) + %{%{Acct-Output-Octets}:-0}), \
+                  0, 0, 0, NOW() \
                 )}"
 
             "%{sql:INSERT INTO radusagestats (username, day, data_usage) \
@@ -301,6 +359,23 @@ server default {
                           WHERE r.username COLLATE utf8mb4_unicode_ci = '%{User-Name}' COLLATE utf8mb4_unicode_ci \
                             AND r.day = CURDATE()}"
                 }
+
+                # Snapshot this Stop packet with 64-bit counters + delta from previous session_tracking values.
+                "%{sql:INSERT INTO session_usage_snapshots \
+                      (username, session_id, nas_ip, framed_ip, acct_status, bytes_in_total, bytes_out_total, delta_bytes_in, delta_bytes_out, delta_total, snapshot_at) \
+                      SELECT \
+                        '%{User-Name}', '%{Acct-Session-Id}', '%{NAS-IP-Address}', '%{Framed-IP-Address}', 'stop', \
+                        ((%{%{Acct-Input-Gigawords}:-0} * 4294967296) + %{%{Acct-Input-Octets}:-0}), \
+                        ((%{%{Acct-Output-Gigawords}:-0} * 4294967296) + %{%{Acct-Output-Octets}:-0}), \
+                        GREATEST(((%{%{Acct-Input-Gigawords}:-0} * 4294967296) + %{%{Acct-Input-Octets}:-0}) - st.bytes_in, 0), \
+                        GREATEST(((%{%{Acct-Output-Gigawords}:-0} * 4294967296) + %{%{Acct-Output-Octets}:-0}) - st.bytes_out, 0), \
+                        GREATEST(((%{%{Acct-Input-Gigawords}:-0} * 4294967296) + %{%{Acct-Input-Octets}:-0}) - st.bytes_in, 0) \
+                          + GREATEST(((%{%{Acct-Output-Gigawords}:-0} * 4294967296) + %{%{Acct-Output-Octets}:-0}) - st.bytes_out, 0), \
+                        NOW() \
+                      FROM session_tracking st \
+                      WHERE st.session_id = '%{Acct-Session-Id}' \
+                        AND st.username COLLATE utf8mb4_unicode_ci = '%{User-Name}' COLLATE utf8mb4_unicode_ci \
+                      LIMIT 1}"
 
                 # Persist latest counters + close session
                 "%{sql: UPDATE session_tracking \
@@ -429,6 +504,24 @@ server default {
                       WHERE r.username = '%{User-Name}' \
                         AND r.day = CURDATE()}"
             }
+
+            # Snapshot this Interim-Update with 64-bit counters + delta from previous values.
+            "%{sql:INSERT INTO session_usage_snapshots \
+                  (username, session_id, nas_ip, framed_ip, acct_status, bytes_in_total, bytes_out_total, delta_bytes_in, delta_bytes_out, delta_total, snapshot_at) \
+                  SELECT \
+                    '%{User-Name}', '%{Acct-Session-Id}', '%{NAS-IP-Address}', '%{Framed-IP-Address}', 'interim', \
+                    ((%{%{Acct-Input-Gigawords}:-0} * 4294967296) + %{%{Acct-Input-Octets}:-0}), \
+                    ((%{%{Acct-Output-Gigawords}:-0} * 4294967296) + %{%{Acct-Output-Octets}:-0}), \
+                    GREATEST(((%{%{Acct-Input-Gigawords}:-0} * 4294967296) + %{%{Acct-Input-Octets}:-0}) - st.bytes_in, 0), \
+                    GREATEST(((%{%{Acct-Output-Gigawords}:-0} * 4294967296) + %{%{Acct-Output-Octets}:-0}) - st.bytes_out, 0), \
+                    GREATEST(((%{%{Acct-Input-Gigawords}:-0} * 4294967296) + %{%{Acct-Input-Octets}:-0}) - st.bytes_in, 0) \
+                      + GREATEST(((%{%{Acct-Output-Gigawords}:-0} * 4294967296) + %{%{Acct-Output-Octets}:-0}) - st.bytes_out, 0), \
+                    NOW() \
+                  FROM session_tracking st \
+                  WHERE st.session_id = '%{Acct-Session-Id}' \
+                    AND st.username = '%{User-Name}' \
+                    AND st.status = 'active' \
+                  LIMIT 1}"
 
             # Persist latest counters
             "%{sql: UPDATE session_tracking \

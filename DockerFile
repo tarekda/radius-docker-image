@@ -40,6 +40,7 @@ RUN for f in /opt/freeradius/3.0/scripts/*.sh; do \
 RUN chmod +x /opt/freeradius/3.0/scripts/*.sh || true
 
 # Add includes to main dictionary
+# Stock dictionaries already define WISPr (14122); extra dictionary.wispr duplicates VENDOR and breaks startup.
 RUN echo '$INCLUDE /etc/freeradius/3.0/dictionary.dailyquota' >> /etc/freeradius/3.0/dictionary && \
     echo '$INCLUDE /etc/freeradius/3.0/dictionary.custom' >> /etc/freeradius/3.0/dictionary
 

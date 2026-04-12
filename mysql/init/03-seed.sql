@@ -44,14 +44,15 @@ ALTER TABLE raduserprofile AUTO_INCREMENT = 1;
 INSERT INTO raduserprofile (
     username,
     profile_id,
+    freenight,
     quota_reset_day,
     is_monthly_exceeded,
     account_status
 ) VALUES 
-    ('testbasic', 1, DAY(NOW()), 0, 'active'),        -- Basic profile has ID 1
-    ('testpremium', 2, DAY(NOW()), 0, 'active'),      -- Premium profile has ID 2
-    ('testbusiness', 3, DAY(NOW()), 0, 'active'),     -- Business profile has ID 3
-    ('testsuspended', 1, DAY(NOW()), 0, 'suspended'); -- Using Basic profile (ID 1)
+    ('testbasic', 1, 0, DAY(NOW()), 0, 'active'),        -- Basic profile has ID 1
+    ('testpremium', 2, 1, DAY(NOW()), 0, 'active'),      -- Premium profile has ID 2
+    ('testbusiness', 3, 0, DAY(NOW()), 0, 'active'),     -- Business profile has ID 3
+    ('testsuspended', 1, 0, DAY(NOW()), 0, 'suspended'); -- Using Basic profile (ID 1)
 
 -- Add passwords for the users
 INSERT INTO radcheck (

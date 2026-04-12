@@ -23,6 +23,43 @@ CREATE TABLE IF NOT EXISTS user_default_profiles (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 " || true
 
+# Per-interim/session snapshots for exact rolling-window usage checks.
+mysql_exec "
+CREATE TABLE IF NOT EXISTS session_usage_snapshots (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  username VARCHAR(64) NOT NULL,
+  session_id VARCHAR(64) NOT NULL,
+  nas_ip VARCHAR(15),
+  framed_ip VARCHAR(15),
+  acct_status ENUM('start', 'interim', 'stop') NOT NULL,
+  bytes_in_total BIGINT NOT NULL DEFAULT 0,
+  bytes_out_total BIGINT NOT NULL DEFAULT 0,
+  delta_bytes_in BIGINT NOT NULL DEFAULT 0,
+  delta_bytes_out BIGINT NOT NULL DEFAULT 0,
+  delta_total BIGINT NOT NULL DEFAULT 0,
+  snapshot_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_sus_user_time (username, snapshot_at),
+  INDEX idx_sus_session_time (session_id, snapshot_at),
+  INDEX idx_sus_nas_time (nas_ip, snapshot_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+" || true
+
+# Per-user free-night flag (legacy DBs may not have this column yet).
+mysql_exec "
+ALTER TABLE raduserprofile
+  ADD COLUMN freenight TINYINT(1) DEFAULT 0;
+" || true
+
+# Subscription expiry (walled-garden IP + optional per-user override in raduserprofile.expiry_framed_ip)
+mysql_exec "
+ALTER TABLE raduserprofile
+  ADD COLUMN expires_at DATETIME NULL DEFAULT NULL;
+" || true
+mysql_exec "
+ALTER TABLE raduserprofile
+  ADD COLUMN expiry_framed_ip VARCHAR(45) NULL DEFAULT NULL;
+" || true
+
 echo "[bootstrap] Ensuring Fallback (FUP) profile speed is 2048k..."
 
 # Make sure the Fallback profile exists, and enforce its speed.

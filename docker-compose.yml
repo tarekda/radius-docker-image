@@ -21,6 +21,12 @@ services:
       DAILY_RESET_AT: "00:00"
       # Logging for Grafana/Loki (writes /var/log/freeradius/{requests,replies,accounting}.log)
       RADIUS_REQUEST_LOG_ENABLED: ${RADIUS_REQUEST_LOG_ENABLED:-0}
+
+      # Expired users: RADIUS still accepts login but returns walled-garden IP + captive redirect URL.
+      # Set EXPIRY_REDIRECT_URL to your public “renew / account expired” page (HTTPS). Example:
+      #   https://portal.example.com/expired?u=%{User-Name}  (literal %{User-Name} is expanded by FreeRADIUS)
+      EXPIRY_FRAMED_IP: ${EXPIRY_FRAMED_IP:-10.255.255.2}
+      EXPIRY_REDIRECT_URL: ${EXPIRY_REDIRECT_URL:-http://127.0.0.1:5173/expired}
     volumes:
       - ./logs:/var/log/freeradius
     ports:
