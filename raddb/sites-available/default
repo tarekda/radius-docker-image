@@ -40,7 +40,7 @@ server default {
         "%{sql:insert into connection_logs (username, mac_address, nas_ip, status, reply_message, timestamp) values ('%{User-Name}', '%{Calling-Station-Id}', '%{NAS-IP-Address}', 'attempt', NULL, NOW());}"
         
         
-        # Block suspended / terminated / inactive. "expired" may still authenticate for captive renewal.
+        # Block suspended / terminated / inactive (expired handled after auto-flip below).
         if ("%{sql:SELECT CASE WHEN account_status IN ('suspended','terminated','inactive') THEN 1 ELSE 0 END FROM raduserprofile WHERE username COLLATE utf8mb4_unicode_ci = '%{User-Name}' COLLATE utf8mb4_unicode_ci LIMIT 1}" == 1) {
             update reply {
                 Reply-Message := "Account is not active"
@@ -55,9 +55,12 @@ server default {
               AND expires_at IS NOT NULL \
               AND expires_at < NOW()}"
 
-        # 1 = walled-garden / renewal mode (only when a real expiry exists; NULL expires_at => normal access)
-        update control {
-            Tmp-Integer-8 := "%{sql:SELECT CASE WHEN account_status = 'expired' AND expires_at IS NOT NULL THEN 1 ELSE 0 END FROM raduserprofile WHERE username COLLATE utf8mb4_unicode_ci = '%{User-Name}' COLLATE utf8mb4_unicode_ci LIMIT 1}"
+        # Same request: if expiry just flipped (or row was already expired), reject — do not allow login until renewed.
+        if ("%{sql:SELECT CASE WHEN account_status = 'expired' THEN 1 ELSE 0 END FROM raduserprofile WHERE username COLLATE utf8mb4_unicode_ci = '%{User-Name}' COLLATE utf8mb4_unicode_ci LIMIT 1}" == 1) {
+            update reply {
+                Reply-Message := "Account expired. Contact your provider to renew."
+            }
+            reject
         }
 
         # Sanitize MAC address
@@ -156,36 +159,9 @@ server default {
             bind_mac
         }
 
-        # Expired accounts: minimal pipe + fixed IP + WISPr redirect (hotspot / captive).
-        # Configure EXPIRY_FRAMED_IP + EXPIRY_REDIRECT_URL on the FreeRADIUS container.
-        if (&control:Tmp-Integer-8 == 1) {
-            update control {
-                Tmp-String-9 := "%{sql:SELECT NULLIF(TRIM(expiry_framed_ip), '') FROM raduserprofile WHERE username COLLATE utf8mb4_unicode_ci = '%{User-Name}' COLLATE utf8mb4_unicode_ci LIMIT 1}"
-            }
-            if ("%{control:Tmp-String-9}" =~ /^$/) {
-                update reply {
-                    Reply-Message := "Account expired; renew to restore service"
-                    Session-Timeout := "28800"
-                    Framed-IP-Address := "$ENV{EXPIRY_FRAMED_IP}"
-                    Mikrotik-Rate-Limit := "128k/128k"
-                    WISPr-Redirection-URL := "$ENV{EXPIRY_REDIRECT_URL}?u=%{User-Name}"
-                }
-            }
-            else {
-                update reply {
-                    Reply-Message := "Account expired; renew to restore service"
-                    Session-Timeout := "28800"
-                    Framed-IP-Address := "%{control:Tmp-String-9}"
-                    Mikrotik-Rate-Limit := "128k/128k"
-                    WISPr-Redirection-URL := "$ENV{EXPIRY_REDIRECT_URL}?u=%{User-Name}"
-                }
-            }
-        }
-        else {
-            update reply {
-                Reply-Message := "Authentication successful for %{User-Name}"
-                Session-Timeout := "%{exec:/opt/freeradius/3.0/scripts/calculate_timeout.sh}"
-            }
+        update reply {
+            Reply-Message := "Authentication successful for %{User-Name}"
+            Session-Timeout := "%{exec:/opt/freeradius/3.0/scripts/calculate_timeout.sh}"
         }
 
         ok

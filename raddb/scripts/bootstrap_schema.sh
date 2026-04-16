@@ -60,6 +60,13 @@ ALTER TABLE raduserprofile
   ADD COLUMN expiry_framed_ip VARCHAR(45) NULL DEFAULT NULL;
 " || true
 
+# Legacy DBs may have CHECK on account_status that omits 'expired' / 'terminated', which breaks
+# RADIUS + backend expiry updates. Safe to drop: app + FreeRADIUS enforce allowed values.
+# If this fails (unknown constraint name), list CHECKs and adjust — see mysql/alter_raduserprofile_expiry.sql
+mysql_exec "
+ALTER TABLE raduserprofile DROP CHECK raduserprofile_chk_1;
+" || true
+
 echo "[bootstrap] Ensuring Fallback (FUP) profile speed is 2048k..."
 
 # Make sure the Fallback profile exists, and enforce its speed.

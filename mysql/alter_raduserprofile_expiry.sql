@@ -24,10 +24,14 @@ ALTER TABLE raduserprofile
 -- CREATE INDEX idx_raduserprofile_account_expires ON raduserprofile (account_status, expires_at);
 
 -- -----------------------------------------------------------------------------
--- Optional: widen/remove CHECK on account_status (older init scripts only)
+-- CHECK on account_status
 -- -----------------------------------------------------------------------------
--- If inserts/updates with account_status = 'expired' or 'terminated' fail with
--- CHECK constraint, list constraints then drop/recreate:
+-- If you see: Check constraint 'raduserprofile_chk_1' is violated — run once:
+--   mysql -u USER -p radius < fix_raduserprofile_chk1_expired.sql
+-- Or uncomment:
+-- ALTER TABLE raduserprofile DROP CHECK raduserprofile_chk_1;
+
+-- If the name differs, list CHECKs then drop the one that restricts account_status:
 --
 --   SELECT tc.CONSTRAINT_NAME, cc.CHECK_CLAUSE
 --   FROM information_schema.TABLE_CONSTRAINTS tc
@@ -38,9 +42,6 @@ ALTER TABLE raduserprofile
 --     AND tc.TABLE_NAME = 'raduserprofile'
 --     AND tc.CONSTRAINT_TYPE = 'CHECK';
 --
--- Example (replace CONSTRAINT_NAME with the name from the query above):
---   ALTER TABLE raduserprofile DROP CHECK raduserprofile_chk_1;
---
--- Or replace the column without a CHECK (application validates statuses):
---   ALTER TABLE raduserprofile
---     MODIFY COLUMN account_status VARCHAR(20) NOT NULL DEFAULT 'active';
+-- If DROP fails because chk_1 was the only CHECK and it enforced quota_reset_day, re-add:
+--   ALTER TABLE raduserprofile ADD CONSTRAINT raduserprofile_chk_quota_reset_day
+--     CHECK (quota_reset_day BETWEEN 1 AND 31);
