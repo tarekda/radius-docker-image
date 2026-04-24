@@ -6,8 +6,10 @@ if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
   exit 1
 }
 
-$repoRoot = Split-Path -Parent $PSScriptRoot
-Set-Location $repoRoot
+$scriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
+$repoRoot = (Get-Item -LiteralPath $scriptDir).Parent.FullName
+$composeFile = Join-Path $repoRoot "docker-compose.yml"
 
-& docker compose down @args
+Set-Location -LiteralPath $repoRoot
 
+& docker compose --file $composeFile --project-directory $repoRoot down @args

@@ -1,6 +1,9 @@
 services:
   freeradius:
-    build: .
+    image: radius-docker-image-freeradius:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
     environment:
       # Set TZ so "00:00" matches your local time (set TZ in your shell/.env if needed)
       TZ: ${TZ:-Asia/Beirut}
@@ -37,4 +40,3 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-
