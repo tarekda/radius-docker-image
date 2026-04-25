@@ -17,7 +17,11 @@ sql {
     radius_db = "$ENV{SQL_DATABASE}"
     read_clients = yes 
     client_table = nas
-    max_connections = 5
+    # The authorize/accounting policies use several SQL xlats per packet.
+    # Keep this above normal auth/accounting burst concurrency or requests will queue
+    # in rlm_sql and NAS retransmits show up as "duplicate packet ... unfinished request".
+    # Make sure MySQL max_connections is comfortably higher than this value.
+    max_connections = 25
     remove_stale_sessions = yes
     read_groups = no
     read_profiles = yes

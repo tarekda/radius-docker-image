@@ -196,7 +196,13 @@ server default {
         # and disrupting user sessions. We already persist accounting in MySQL below, so
         # disable `detail` file writing.
         #detail
-        sql
+
+        # Do not run the generic rlm_sql accounting writer here.
+        # This section already owns radacct writes explicitly in the Start/Stop/Interim branches below,
+        # plus it updates session_tracking, radusagestats, quota flags, and CoA state in the same flow.
+        # Running `sql` here as well writes radacct a second time and can hit duplicate acctuniqueid.
+        # Keep rlm_sql available for the %{sql:...} expansions used below.
+        #sql
         exec
 
         # Accounting logging (Interim-Update/Start/Stop)
@@ -312,7 +318,8 @@ server default {
 
 
 
-            sql
+            # radacct is already populated explicitly above and by the accounting sql module
+            # at the start of this section; avoid an extra rlm_sql pass per packet.
             ok
         }
         elsif (Acct-Status-Type == Stop) {
@@ -379,7 +386,7 @@ server default {
                                             (SELECT COALESCE(dp.monthly_quota, cp.monthly_quota) \
                                                FROM raduserprofile up \
                                                JOIN radprofile cp ON cp.id = up.profile_id \
-                                          LEFT JOIN user_default_profiles udp ON udp.username = up.username \
+                                          LEFT JOIN user_default_profiles udp ON udp.username COLLATE utf8mb4_unicode_ci = up.username COLLATE utf8mb4_unicode_ci \
                                           LEFT JOIN radprofile dp ON dp.id = udp.default_profile_id \
                                               WHERE up.username COLLATE utf8mb4_unicode_ci = '%{User-Name}' COLLATE utf8mb4_unicode_ci \
                                               LIMIT 1), 1, 0) \
@@ -394,7 +401,7 @@ server default {
                                             (SELECT COALESCE(dp.daily_quota, cp.daily_quota) \
                                                FROM raduserprofile up \
                                                JOIN radprofile cp ON cp.id = up.profile_id \
-                                          LEFT JOIN user_default_profiles udp ON udp.username = up.username \
+                                          LEFT JOIN user_default_profiles udp ON udp.username COLLATE utf8mb4_unicode_ci = up.username COLLATE utf8mb4_unicode_ci \
                                           LEFT JOIN radprofile dp ON dp.id = udp.default_profile_id \
                                               WHERE up.username COLLATE utf8mb4_unicode_ci = '%{User-Name}' COLLATE utf8mb4_unicode_ci \
                                               LIMIT 1), 1, 0) \
@@ -412,7 +419,7 @@ server default {
 
                 # Close radacct row
                 # (If start packet was missed, create the row before closing it.)
-                "%{sql:INSERT INTO radacct (acctsessionid, acctuniqueid, username, nasipaddress, \
+                "%{sql:INSERT IGNORE INTO radacct (acctsessionid, acctuniqueid, username, nasipaddress, \
                         acctstarttime, acctupdatetime, acctstoptime, acctinterval, acctsessiontime, \
                         acctinputoctets, acctoutputoctets, calledstationid, callingstationid, framedipaddress) \
                       SELECT \
@@ -431,7 +438,7 @@ server default {
                       WHERE NOT EXISTS ( \
                         SELECT 1 FROM radacct \
                         WHERE acctsessionid = '%{Acct-Session-Id}' \
-                          AND username = '%{User-Name}' \
+                          AND username COLLATE utf8mb4_unicode_ci = '%{User-Name}' COLLATE utf8mb4_unicode_ci \
                           AND nasipaddress = '%{NAS-IP-Address}' \
                           AND acctstoptime IS NULL \
                       )}"
@@ -447,17 +454,18 @@ server default {
                         framedipaddress = '%{Framed-IP-Address}', \
                         acctterminatecause = '%{Acct-Terminate-Cause}' \
                       WHERE acctsessionid = '%{Acct-Session-Id}' \
-                        AND username = '%{User-Name}' \
+                        AND username COLLATE utf8mb4_unicode_ci = '%{User-Name}' COLLATE utf8mb4_unicode_ci \
                         AND nasipaddress = '%{NAS-IP-Address}' \
                         AND acctstoptime IS NULL}"
 
                 track_usage
-                sql
         }
         elsif (Acct-Status-Type == Interim-Update) {
 
+            # Keep Acct-Status-Type as Interim-Update. rlm_sql uses it to resolve
+            # accounting.type.interim-update.query; changing it to "Alive" makes
+            # the module look up type.alive.query and wastes/fails a SQL pass.
             update request {
-                Acct-Status-Type      := "Alive"
                 SQL-User-Name         := "%{User-Name}"
                 SQL-Acct-Session-Id   := "%{Acct-Session-Id}"
             }
@@ -472,12 +480,12 @@ server default {
             if (&control:Free-Night != "1") {
                 "%{sql:UPDATE radusagestats r \
                       JOIN session_tracking st \
-                        ON st.username = r.username \
+                        ON st.username COLLATE utf8mb4_unicode_ci = r.username COLLATE utf8mb4_unicode_ci \
                        AND st.session_id = '%{Acct-Session-Id}' \
                       SET r.data_usage = r.data_usage \
                           + GREATEST(((%{%{Acct-Input-Gigawords}:-0} * 4294967296) + %{%{Acct-Input-Octets}:-0}) - st.bytes_in, 0) \
                           + GREATEST(((%{%{Acct-Output-Gigawords}:-0} * 4294967296) + %{%{Acct-Output-Octets}:-0}) - st.bytes_out, 0) \
-                      WHERE r.username = '%{User-Name}' \
+                      WHERE r.username COLLATE utf8mb4_unicode_ci = '%{User-Name}' COLLATE utf8mb4_unicode_ci \
                         AND r.day = CURDATE()}"
             }
 
@@ -495,7 +503,7 @@ server default {
                     NOW() \
                   FROM session_tracking st \
                   WHERE st.session_id = '%{Acct-Session-Id}' \
-                    AND st.username = '%{User-Name}' \
+                    AND st.username COLLATE utf8mb4_unicode_ci = '%{User-Name}' COLLATE utf8mb4_unicode_ci \
                     AND st.status = 'active' \
                   LIMIT 1}"
 
@@ -507,11 +515,11 @@ server default {
                        session_time = %{%{Acct-Session-Time}:-0} \
                  WHERE session_id = '%{Acct-Session-Id}' \
                    AND status = 'active' \
-                   AND username = '%{User-Name}'}"
+                   AND username COLLATE utf8mb4_unicode_ci = '%{User-Name}' COLLATE utf8mb4_unicode_ci}"
 
             # Update radacct row
             # (If start packet was missed, create the row here.)
-            "%{sql:INSERT INTO radacct (acctsessionid, acctuniqueid, username, nasipaddress, \
+            "%{sql:INSERT IGNORE INTO radacct (acctsessionid, acctuniqueid, username, nasipaddress, \
                     acctstarttime, acctupdatetime, acctstoptime, acctinterval, acctsessiontime, \
                     acctinputoctets, acctoutputoctets, calledstationid, callingstationid, framedipaddress) \
                   SELECT \
@@ -530,7 +538,7 @@ server default {
                   WHERE NOT EXISTS ( \
                     SELECT 1 FROM radacct \
                     WHERE acctsessionid = '%{Acct-Session-Id}' \
-                      AND username = '%{User-Name}' \
+                      AND username COLLATE utf8mb4_unicode_ci = '%{User-Name}' COLLATE utf8mb4_unicode_ci \
                       AND nasipaddress = '%{NAS-IP-Address}' \
                       AND acctstoptime IS NULL \
                   )}"
@@ -544,12 +552,9 @@ server default {
                     callingstationid = '%{Calling-Station-Id}', \
                     framedipaddress = '%{Framed-IP-Address}' \
                   WHERE acctsessionid = '%{Acct-Session-Id}' \
-                    AND username = '%{User-Name}' \
+                    AND username COLLATE utf8mb4_unicode_ci = '%{User-Name}' COLLATE utf8mb4_unicode_ci \
                     AND nasipaddress = '%{NAS-IP-Address}' \
                     AND acctstoptime IS NULL}"
-
-            sql
-
 
             # Check if user has exceeded their monthly quota (compare against default/original plan quota).
             update request {
@@ -558,12 +563,12 @@ server default {
                                         (SELECT COALESCE(dp.monthly_quota, cp.monthly_quota) \
                                            FROM raduserprofile up \
                                            JOIN radprofile cp ON cp.id = up.profile_id \
-                                      LEFT JOIN user_default_profiles udp ON BINARY udp.username = BINARY up.username \
+                                      LEFT JOIN user_default_profiles udp ON udp.username COLLATE utf8mb4_unicode_ci = up.username COLLATE utf8mb4_unicode_ci \
                                       LEFT JOIN radprofile dp ON dp.id = udp.default_profile_id \
-                                          WHERE up.username = '%{User-Name}' \
+                                          WHERE up.username COLLATE utf8mb4_unicode_ci = '%{User-Name}' COLLATE utf8mb4_unicode_ci \
                                           LIMIT 1), 1, 0) \
                                     FROM radusagestats \
-                                    WHERE username = '%{User-Name}' \
+                                    WHERE username COLLATE utf8mb4_unicode_ci = '%{User-Name}' COLLATE utf8mb4_unicode_ci \
                                     AND day >= DATE_FORMAT(NOW(), CONCAT('%Y-%m-',LPAD((SELECT up.quota_reset_day FROM raduserprofile up WHERE up.username COLLATE utf8mb4_unicode_ci = '%{User-Name}' COLLATE utf8mb4_unicode_ci), 2, '0'))) }"
             }
 
@@ -574,12 +579,12 @@ server default {
                                         (SELECT COALESCE(dp.daily_quota, cp.daily_quota) \
                                            FROM raduserprofile up \
                                            JOIN radprofile cp ON cp.id = up.profile_id \
-                                      LEFT JOIN user_default_profiles udp ON BINARY udp.username = BINARY up.username \
+                                      LEFT JOIN user_default_profiles udp ON udp.username COLLATE utf8mb4_unicode_ci = up.username COLLATE utf8mb4_unicode_ci \
                                       LEFT JOIN radprofile dp ON dp.id = udp.default_profile_id \
-                                          WHERE up.username = '%{User-Name}' \
+                                          WHERE up.username COLLATE utf8mb4_unicode_ci = '%{User-Name}' COLLATE utf8mb4_unicode_ci \
                                           LIMIT 1), 1, 0) \
                                     FROM radusagestats \
-                                    WHERE username = '%{User-Name}' \
+                                    WHERE username COLLATE utf8mb4_unicode_ci = '%{User-Name}' COLLATE utf8mb4_unicode_ci \
                                     AND day = CURDATE() }"
             }
 
