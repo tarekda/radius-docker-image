@@ -94,9 +94,21 @@ CREATE TABLE connection_logs (
     terminate_cause ENUM('user-request', 'idle-timeout', 'session-timeout', 'lost-carrier') NULL,
     reply_message VARCHAR(255) NULL,
     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_connection_logs_timestamp_status (timestamp, status),
     INDEX idx_connection_logs_mac_status_ts (mac_address, status, timestamp),
     INDEX idx_connection_logs_username_status_ts (username, status, timestamp)
 );
+
+CREATE TABLE connection_log_hourly_stats (
+    bucket DATETIME NOT NULL PRIMARY KEY,
+    attempts BIGINT NOT NULL DEFAULT 0,
+    accepted BIGINT NOT NULL DEFAULT 0,
+    rejected BIGINT NOT NULL DEFAULT 0,
+    timeout BIGINT NOT NULL DEFAULT 0,
+    error BIGINT NOT NULL DEFAULT 0,
+    total BIGINT NOT NULL DEFAULT 0,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE settings (
     id INT AUTO_INCREMENT PRIMARY KEY,

@@ -52,7 +52,7 @@ Framed-IP-Address = ${FRAMED_IP}"
 fi
 
 # IMPORTANT:
-# Do not use `-x` here. FreeRADIUS exec parsing can choke on debug output,
-# causing "Failed parsing output" / "unfinished request" errors.
-echo "$PAYLOAD" | radclient "${NAS_IP}:3799" coa "$SECRET" >/dev/null 2>&1 || true
+# Do not use `-x` here. FreeRADIUS exec parsing can choke on debug output.
+# Keep retries/timeouts low: this script is best-effort and is run from accounting.
+echo "$PAYLOAD" | timeout 3s radclient -q -r 1 -t 1 "${NAS_IP}:3799" coa "$SECRET" >/dev/null 2>&1 || true
 

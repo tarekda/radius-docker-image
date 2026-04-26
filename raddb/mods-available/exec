@@ -75,9 +75,9 @@ exec track_usage {
 
 # Send CoA to apply fallback Mikrotik-Rate-Limit mid-session
 exec coa_rate_limit {
-    # Run synchronously, but do not parse any output.
-    # (FreeRADIUS cannot read output_pairs when wait = no.)
-    wait = yes
+    # Fire-and-forget. Do not block accounting while waiting for the NAS CoA response;
+    # slow/lost CoA replies cause "duplicate packet ... unfinished request in coa_rate_limit".
+    wait = no
     input_pairs = request
     shell_escape = yes
     parse_reply = no
