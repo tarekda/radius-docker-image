@@ -27,16 +27,12 @@ sql {
     read_profiles = yes
 
 
-    #
-    # Collation note (MySQL 8 default utf8mb4_0900_ai_ci vs older utf8mb4_unicode_ci):
-    # Some deployments end up with different collations across tables (e.g. `radcheck.username` vs `raduserprofile.username`),
-    # which makes `=` / JOIN comparisons fail with "Illegal mix of collations".
-    # Force a single collation at comparison time to keep things working across mixed schemas.
-    #
+    # Username columns should share the same collation so MySQL can use indexes.
+    # Avoid forcing COLLATE in these hot authorize queries.
     authorize_check_query = "SELECT rc.id, rc.username, rc.attribute, rc.value, rc.op \
        FROM radcheck rc \
-       JOIN raduserprofile rup ON rc.username COLLATE utf8mb4_unicode_ci = rup.username COLLATE utf8mb4_unicode_ci \
-       WHERE rc.username COLLATE utf8mb4_unicode_ci = '%{User-Name}' COLLATE utf8mb4_unicode_ci \
+       JOIN raduserprofile rup ON rc.username = rup.username \
+       WHERE rc.username = '%{User-Name}' \
        AND (rup.account_status = 'active' OR rup.account_status = 'suspended')"
 
     # Return Mikrotik-Rate-Limit based on the user's profile.
@@ -47,16 +43,16 @@ sql {
                               (CASE \
                                 WHEN ( \
                                   up.is_fallback = 1 OR up.is_monthly_exceeded = 1 OR \
-                                  (SELECT COALESCE(SUM(r1.data_usage), 0) FROM radusagestats r1 WHERE r1.username COLLATE utf8mb4_unicode_ci = up.username COLLATE utf8mb4_unicode_ci AND r1.day = CURDATE()) > p.daily_quota OR \
+                                  (SELECT COALESCE(SUM(r1.data_usage), 0) FROM radusagestats r1 WHERE r1.username = up.username AND r1.day = CURDATE()) > p.daily_quota OR \
                                   (SELECT COALESCE(SUM(r2.data_usage), 0) FROM radusagestats r2 \
-                                     WHERE r2.username COLLATE utf8mb4_unicode_ci = up.username COLLATE utf8mb4_unicode_ci \
+                                     WHERE r2.username = up.username \
                                        AND r2.day >= ( \
                                          SELECT CASE \
                                            WHEN DAY(NOW()) >= up2.quota_reset_day \
                                              THEN DATE(CONCAT(YEAR(NOW()), '-', LPAD(MONTH(NOW()), 2, '0'), '-', LPAD(up2.quota_reset_day, 2, '0'))) \
                                            ELSE DATE(CONCAT(YEAR(DATE_SUB(NOW(), INTERVAL 1 MONTH)), '-', LPAD(MONTH(DATE_SUB(NOW(), INTERVAL 1 MONTH)), 2, '0'), '-', LPAD(up2.quota_reset_day, 2, '0'))) \
                                          END \
-                                         FROM raduserprofile up2 WHERE up2.username COLLATE utf8mb4_unicode_ci = up.username COLLATE utf8mb4_unicode_ci \
+                                         FROM raduserprofile up2 WHERE up2.username = up.username \
                                        ) \
                                    ) > p.monthly_quota \
                                 ) \
@@ -67,16 +63,16 @@ sql {
                               (CASE \
                                 WHEN ( \
                                   up.is_fallback = 1 OR up.is_monthly_exceeded = 1 OR \
-                                  (SELECT COALESCE(SUM(r1.data_usage), 0) FROM radusagestats r1 WHERE r1.username COLLATE utf8mb4_unicode_ci = up.username COLLATE utf8mb4_unicode_ci AND r1.day = CURDATE()) > p.daily_quota OR \
+                                  (SELECT COALESCE(SUM(r1.data_usage), 0) FROM radusagestats r1 WHERE r1.username = up.username AND r1.day = CURDATE()) > p.daily_quota OR \
                                   (SELECT COALESCE(SUM(r2.data_usage), 0) FROM radusagestats r2 \
-                                     WHERE r2.username COLLATE utf8mb4_unicode_ci = up.username COLLATE utf8mb4_unicode_ci \
+                                     WHERE r2.username = up.username \
                                        AND r2.day >= ( \
                                          SELECT CASE \
                                            WHEN DAY(NOW()) >= up2.quota_reset_day \
                                              THEN DATE(CONCAT(YEAR(NOW()), '-', LPAD(MONTH(NOW()), 2, '0'), '-', LPAD(up2.quota_reset_day, 2, '0'))) \
                                            ELSE DATE(CONCAT(YEAR(DATE_SUB(NOW(), INTERVAL 1 MONTH)), '-', LPAD(MONTH(DATE_SUB(NOW(), INTERVAL 1 MONTH)), 2, '0'), '-', LPAD(up2.quota_reset_day, 2, '0'))) \
                                          END \
-                                         FROM raduserprofile up2 WHERE up2.username COLLATE utf8mb4_unicode_ci = up.username COLLATE utf8mb4_unicode_ci \
+                                         FROM raduserprofile up2 WHERE up2.username = up.username \
                                        ) \
                                    ) > p.monthly_quota \
                                 ) \
@@ -88,7 +84,7 @@ sql {
                             FROM raduserprofile up \
                             JOIN radprofile p ON p.id = up.profile_id \
                             LEFT JOIN radprofile fb ON fb.profile_name = 'Fallback' \
-                            WHERE up.username COLLATE utf8mb4_unicode_ci = '%{User-Name}' COLLATE utf8mb4_unicode_ci"
+                            WHERE up.username = '%{User-Name}'"
 
     #client_query = "SELECT nasname as ipaddr, secret FROM nas WHERE nasname = '%{Packet-Src-IP-Address}'"
     #client_query = "SELECT nasname, secret FROM nas WHERE nasname = '%{Packet-Src-IP-Address}' LIMIT 1"

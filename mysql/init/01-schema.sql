@@ -44,6 +44,7 @@ CREATE TABLE raduserprofile (
     expires_at DATETIME NULL DEFAULT NULL,
     expiry_framed_ip VARCHAR(45) NULL DEFAULT NULL,
     FOREIGN KEY (profile_id) REFERENCES radprofile(id),
+    INDEX idx_raduserprofile_username (username),
     CHECK (quota_reset_day BETWEEN 1 AND 31)
 );
 
@@ -184,7 +185,7 @@ CREATE TABLE session_usage_snapshots (
     INDEX idx_sus_user_time (username, snapshot_at),
     INDEX idx_sus_session_time (session_id, snapshot_at),
     INDEX idx_sus_nas_time (nas_ip, snapshot_at)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 CREATE TABLE session_tracking (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
@@ -215,7 +216,7 @@ CREATE TABLE IF NOT EXISTS user_default_profiles (
     PRIMARY KEY (username),
     INDEX idx_udp_default_profile_id (default_profile_id),
     CONSTRAINT fk_udp_profile FOREIGN KEY (default_profile_id) REFERENCES radprofile(id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 CREATE TABLE IF NOT EXISTS nas (
     id INT AUTO_INCREMENT PRIMARY KEY,

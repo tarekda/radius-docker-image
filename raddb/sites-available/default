@@ -41,7 +41,7 @@ server default {
         
         
         # Block suspended / terminated / inactive (expired handled after auto-flip below).
-        if ("%{sql:SELECT CASE WHEN account_status IN ('suspended','terminated','inactive') THEN 1 ELSE 0 END FROM raduserprofile WHERE username COLLATE utf8mb4_unicode_ci = '%{User-Name}' COLLATE utf8mb4_unicode_ci LIMIT 1}" == 1) {
+        if ("%{sql:SELECT CASE WHEN account_status IN ('suspended','terminated','inactive') THEN 1 ELSE 0 END FROM raduserprofile WHERE username = '%{User-Name}' LIMIT 1}" == 1) {
             update reply {
                 Reply-Message := "Account is not active"
             }
@@ -50,13 +50,13 @@ server default {
 
         # Flip active -> expired when past expires_at (server local time = MySQL NOW(); align TZ with radacct).
         "%{sql:UPDATE raduserprofile SET account_status = 'expired' \
- WHERE username COLLATE utf8mb4_unicode_ci = '%{User-Name}' COLLATE utf8mb4_unicode_ci \
+ WHERE username = '%{User-Name}' \
               AND account_status = 'active' \
               AND expires_at IS NOT NULL \
               AND expires_at < NOW()}"
 
         # Same request: if expiry just flipped (or row was already expired), reject — do not allow login until renewed.
-        if ("%{sql:SELECT CASE WHEN account_status = 'expired' THEN 1 ELSE 0 END FROM raduserprofile WHERE username COLLATE utf8mb4_unicode_ci = '%{User-Name}' COLLATE utf8mb4_unicode_ci LIMIT 1}" == 1) {
+        if ("%{sql:SELECT CASE WHEN account_status = 'expired' THEN 1 ELSE 0 END FROM raduserprofile WHERE username = '%{User-Name}' LIMIT 1}" == 1) {
             update reply {
                 Reply-Message := "Account expired. Contact your provider to renew."
             }
@@ -67,9 +67,9 @@ server default {
         mac-format
 
         # Check if user has any MAC bindings
-        if ("%{sql:SELECT COUNT(*) FROM user_mac WHERE username COLLATE utf8mb4_unicode_ci = '%{User-Name}' COLLATE utf8mb4_unicode_ci}" > 0) {
+        if ("%{sql:SELECT COUNT(*) FROM user_mac WHERE username = '%{User-Name}'}" > 0) {
             # Check if the Calling-Station-Id (MAC) matches the bound MAC
-            if ("%{sql:SELECT COUNT(*) FROM user_mac WHERE username COLLATE utf8mb4_unicode_ci = '%{User-Name}' COLLATE utf8mb4_unicode_ci AND mac_address = '%{Calling-Station-Id}'}" == 0) {
+            if ("%{sql:SELECT COUNT(*) FROM user_mac WHERE username = '%{User-Name}' AND mac_address = '%{Calling-Station-Id}'}" == 0) {
                 update reply {
                     Reply-Message := "Unauthorized MAC address. Access Denied."
                 }
@@ -109,16 +109,16 @@ server default {
             #Session-Timeout := "%{sql:SELECT session_timeout FROM radprofile p JOIN raduserprofile up ON p.id = up.profile_id WHERE up.username = '%{User-Name}'}"
             
             # Idle timeout (in seconds)
-            Idle-Timeout := "%{sql:SELECT idle_timeout FROM radprofile p JOIN raduserprofile up ON p.id = up.profile_id WHERE up.username COLLATE utf8mb4_unicode_ci = '%{User-Name}' COLLATE utf8mb4_unicode_ci}"
+            Idle-Timeout := "%{sql:SELECT idle_timeout FROM radprofile p JOIN raduserprofile up ON p.id = up.profile_id WHERE up.username = '%{User-Name}'}"
             
             # Maximum number of concurrent sessions
-            Port-Limit := "%{sql:SELECT max_sessions FROM radprofile p JOIN raduserprofile up ON p.id = up.profile_id WHERE up.username COLLATE utf8mb4_unicode_ci = '%{User-Name}' COLLATE utf8mb4_unicode_ci}"
+            Port-Limit := "%{sql:SELECT max_sessions FROM radprofile p JOIN raduserprofile up ON p.id = up.profile_id WHERE up.username = '%{User-Name}'}"
         }
 
         # Check for concurrent sessions (ignore stale sessions).
         # A session is considered "active" only if it has an update within the last 10 minutes.
         # IMPORTANT: use >= so max_sessions=1 blocks a 2nd active session.
-        if ("%{sql:SELECT COUNT(*) FROM radacct WHERE username COLLATE utf8mb4_unicode_ci = '%{User-Name}' COLLATE utf8mb4_unicode_ci AND acctstoptime IS NULL AND COALESCE(acctupdatetime, acctstarttime) >= DATE_SUB(NOW(), INTERVAL 10 MINUTE)}" >= "%{sql:SELECT max_sessions FROM radprofile p JOIN raduserprofile up ON p.id = up.profile_id WHERE up.username COLLATE utf8mb4_unicode_ci = '%{User-Name}' COLLATE utf8mb4_unicode_ci}") {
+        if ("%{sql:SELECT COUNT(*) FROM radacct WHERE username = '%{User-Name}' AND acctstoptime IS NULL AND COALESCE(acctupdatetime, acctstarttime) >= DATE_SUB(NOW(), INTERVAL 10 MINUTE)}" >= "%{sql:SELECT max_sessions FROM radprofile p JOIN raduserprofile up ON p.id = up.profile_id WHERE up.username = '%{User-Name}'}") {
             update reply {
                 Reply-Message := "Too many concurrent sessions"
             }
@@ -155,7 +155,7 @@ server default {
         
         
         # Bind MAC if needed
-        if ("%{sql:SELECT COALESCE(COUNT(*), 0) FROM user_mac WHERE username COLLATE utf8mb4_unicode_ci = '%{User-Name}' COLLATE utf8mb4_unicode_ci AND mac_address = '%{Calling-Station-Id}'}" == 0) {
+        if ("%{sql:SELECT COALESCE(COUNT(*), 0) FROM user_mac WHERE username = '%{User-Name}' AND mac_address = '%{Calling-Station-Id}'}" == 0) {
             bind_mac
         }
 
@@ -227,7 +227,7 @@ server default {
                 SELECT 1 \
                 FROM settings s \
                 JOIN raduserprofile up \
-                  ON up.username COLLATE utf8mb4_unicode_ci = '%{User-Name}' COLLATE utf8mb4_unicode_ci \
+                  ON up.username = '%{User-Name}' \
                 WHERE s.key_attribute = 'Free-Night' \
                   AND s.if_enabled = '1' \
                   AND COALESCE(up.freenight, 0) = 1 \
@@ -265,9 +265,9 @@ server default {
                 VALUES ( \
                   '%{Acct-Session-Id}', '%{SQL-User-Name}', '%{Calling-Station-Id}', NOW(), NOW(), 'active', \
                   '%{NAS-IP-Address}', '%{Framed-IP-Address}', \
-                  ((%{%{Acct-Input-Gigawords}:-0} * 4294967296) + %{%{Acct-Input-Octets}:-0}), \
-                  ((%{%{Acct-Output-Gigawords}:-0} * 4294967296) + %{%{Acct-Output-Octets}:-0}), \
-                  %{%{Acct-Session-Time}:-0} \
+                  ((CAST(COALESCE(NULLIF('%{Acct-Input-Gigawords}', ''), '0') AS UNSIGNED) * 4294967296) + CAST(COALESCE(NULLIF('%{Acct-Input-Octets}', ''), '0') AS UNSIGNED)), \
+                  ((CAST(COALESCE(NULLIF('%{Acct-Output-Gigawords}', ''), '0') AS UNSIGNED) * 4294967296) + CAST(COALESCE(NULLIF('%{Acct-Output-Octets}', ''), '0') AS UNSIGNED)), \
+                  COALESCE(NULLIF('%{Acct-Session-Time}', ''), 0) \
                 )}"
 
             # Snapshot absolute counters at session start (baseline for rolling-window usage checks).
@@ -275,8 +275,8 @@ server default {
                 (username, session_id, nas_ip, framed_ip, acct_status, bytes_in_total, bytes_out_total, delta_bytes_in, delta_bytes_out, delta_total, snapshot_at) \
                 VALUES ( \
                   '%{User-Name}', '%{Acct-Session-Id}', '%{NAS-IP-Address}', '%{Framed-IP-Address}', 'start', \
-                  ((%{%{Acct-Input-Gigawords}:-0} * 4294967296) + %{%{Acct-Input-Octets}:-0}), \
-                  ((%{%{Acct-Output-Gigawords}:-0} * 4294967296) + %{%{Acct-Output-Octets}:-0}), \
+                  ((CAST(COALESCE(NULLIF('%{Acct-Input-Gigawords}', ''), '0') AS UNSIGNED) * 4294967296) + CAST(COALESCE(NULLIF('%{Acct-Input-Octets}', ''), '0') AS UNSIGNED)), \
+                  ((CAST(COALESCE(NULLIF('%{Acct-Output-Gigawords}', ''), '0') AS UNSIGNED) * 4294967296) + CAST(COALESCE(NULLIF('%{Acct-Output-Octets}', ''), '0') AS UNSIGNED)), \
                   0, 0, 0, NOW() \
                 )}"
 
@@ -334,12 +334,12 @@ server default {
                 if (&control:Free-Night != "1") {
                     "%{sql:UPDATE radusagestats r \
                           JOIN session_tracking st \
-                            ON st.username COLLATE utf8mb4_unicode_ci = r.username COLLATE utf8mb4_unicode_ci \
+                            ON st.username = r.username \
                            AND st.session_id = '%{Acct-Session-Id}' \
                           SET r.data_usage = r.data_usage \
-                              + GREATEST(((%{%{Acct-Input-Gigawords}:-0} * 4294967296) + %{%{Acct-Input-Octets}:-0}) - st.bytes_in, 0) \
-                              + GREATEST(((%{%{Acct-Output-Gigawords}:-0} * 4294967296) + %{%{Acct-Output-Octets}:-0}) - st.bytes_out, 0) \
-                          WHERE r.username COLLATE utf8mb4_unicode_ci = '%{User-Name}' COLLATE utf8mb4_unicode_ci \
+                              + GREATEST(CAST(((CAST(COALESCE(NULLIF('%{Acct-Input-Gigawords}', ''), '0') AS UNSIGNED) * 4294967296) + CAST(COALESCE(NULLIF('%{Acct-Input-Octets}', ''), '0') AS UNSIGNED)) AS SIGNED) - CAST(st.bytes_in AS SIGNED), 0) \
+                              + GREATEST(CAST(((CAST(COALESCE(NULLIF('%{Acct-Output-Gigawords}', ''), '0') AS UNSIGNED) * 4294967296) + CAST(COALESCE(NULLIF('%{Acct-Output-Octets}', ''), '0') AS UNSIGNED)) AS SIGNED) - CAST(st.bytes_out AS SIGNED), 0) \
+                          WHERE r.username = '%{User-Name}' \
                             AND r.day = CURDATE()}"
                 }
 
@@ -348,16 +348,16 @@ server default {
                       (username, session_id, nas_ip, framed_ip, acct_status, bytes_in_total, bytes_out_total, delta_bytes_in, delta_bytes_out, delta_total, snapshot_at) \
                       SELECT \
                         '%{User-Name}', '%{Acct-Session-Id}', '%{NAS-IP-Address}', '%{Framed-IP-Address}', 'stop', \
-                        ((%{%{Acct-Input-Gigawords}:-0} * 4294967296) + %{%{Acct-Input-Octets}:-0}), \
-                        ((%{%{Acct-Output-Gigawords}:-0} * 4294967296) + %{%{Acct-Output-Octets}:-0}), \
-                        GREATEST(((%{%{Acct-Input-Gigawords}:-0} * 4294967296) + %{%{Acct-Input-Octets}:-0}) - st.bytes_in, 0), \
-                        GREATEST(((%{%{Acct-Output-Gigawords}:-0} * 4294967296) + %{%{Acct-Output-Octets}:-0}) - st.bytes_out, 0), \
-                        GREATEST(((%{%{Acct-Input-Gigawords}:-0} * 4294967296) + %{%{Acct-Input-Octets}:-0}) - st.bytes_in, 0) \
-                          + GREATEST(((%{%{Acct-Output-Gigawords}:-0} * 4294967296) + %{%{Acct-Output-Octets}:-0}) - st.bytes_out, 0), \
+                        ((CAST(COALESCE(NULLIF('%{Acct-Input-Gigawords}', ''), '0') AS UNSIGNED) * 4294967296) + CAST(COALESCE(NULLIF('%{Acct-Input-Octets}', ''), '0') AS UNSIGNED)), \
+                        ((CAST(COALESCE(NULLIF('%{Acct-Output-Gigawords}', ''), '0') AS UNSIGNED) * 4294967296) + CAST(COALESCE(NULLIF('%{Acct-Output-Octets}', ''), '0') AS UNSIGNED)), \
+                        GREATEST(CAST(((CAST(COALESCE(NULLIF('%{Acct-Input-Gigawords}', ''), '0') AS UNSIGNED) * 4294967296) + CAST(COALESCE(NULLIF('%{Acct-Input-Octets}', ''), '0') AS UNSIGNED)) AS SIGNED) - CAST(st.bytes_in AS SIGNED), 0), \
+                        GREATEST(CAST(((CAST(COALESCE(NULLIF('%{Acct-Output-Gigawords}', ''), '0') AS UNSIGNED) * 4294967296) + CAST(COALESCE(NULLIF('%{Acct-Output-Octets}', ''), '0') AS UNSIGNED)) AS SIGNED) - CAST(st.bytes_out AS SIGNED), 0), \
+                        GREATEST(CAST(((CAST(COALESCE(NULLIF('%{Acct-Input-Gigawords}', ''), '0') AS UNSIGNED) * 4294967296) + CAST(COALESCE(NULLIF('%{Acct-Input-Octets}', ''), '0') AS UNSIGNED)) AS SIGNED) - CAST(st.bytes_in AS SIGNED), 0) \
+                          + GREATEST(CAST(((CAST(COALESCE(NULLIF('%{Acct-Output-Gigawords}', ''), '0') AS UNSIGNED) * 4294967296) + CAST(COALESCE(NULLIF('%{Acct-Output-Octets}', ''), '0') AS UNSIGNED)) AS SIGNED) - CAST(st.bytes_out AS SIGNED), 0), \
                         NOW() \
                       FROM session_tracking st \
                       WHERE st.session_id = '%{Acct-Session-Id}' \
-                        AND st.username COLLATE utf8mb4_unicode_ci = '%{User-Name}' COLLATE utf8mb4_unicode_ci \
+                        AND st.username = '%{User-Name}' \
                       LIMIT 1}"
 
                 # Persist latest counters + close session
@@ -365,11 +365,11 @@ server default {
                        SET end_time = NOW(), \
                            last_update = NOW(), \
                            status = 'completed', \
-                           bytes_in = ((%{%{Acct-Input-Gigawords}:-0} * 4294967296) + %{%{Acct-Input-Octets}:-0}), \
-                           bytes_out = ((%{%{Acct-Output-Gigawords}:-0} * 4294967296) + %{%{Acct-Output-Octets}:-0}), \
-                           session_time = %{%{Acct-Session-Time}:-0} \
+                           bytes_in = ((CAST(COALESCE(NULLIF('%{Acct-Input-Gigawords}', ''), '0') AS UNSIGNED) * 4294967296) + CAST(COALESCE(NULLIF('%{Acct-Input-Octets}', ''), '0') AS UNSIGNED)), \
+                           bytes_out = ((CAST(COALESCE(NULLIF('%{Acct-Output-Gigawords}', ''), '0') AS UNSIGNED) * 4294967296) + CAST(COALESCE(NULLIF('%{Acct-Output-Octets}', ''), '0') AS UNSIGNED)), \
+                           session_time = COALESCE(NULLIF('%{Acct-Session-Time}', ''), 0) \
                      WHERE session_id = '%{Acct-Session-Id}' \
-                       AND username COLLATE utf8mb4_unicode_ci = '%{User-Name}' COLLATE utf8mb4_unicode_ci}"
+                       AND username = '%{User-Name}'}"
 
                 #
                 # Real-time quota enforcement on Stop as well (sessions may end before next Interim-Update).
@@ -386,13 +386,13 @@ server default {
                                             (SELECT COALESCE(dp.monthly_quota, cp.monthly_quota) \
                                                FROM raduserprofile up \
                                                JOIN radprofile cp ON cp.id = up.profile_id \
-                                          LEFT JOIN user_default_profiles udp ON udp.username COLLATE utf8mb4_unicode_ci = up.username COLLATE utf8mb4_unicode_ci \
+                                          LEFT JOIN user_default_profiles udp ON udp.username = up.username \
                                           LEFT JOIN radprofile dp ON dp.id = udp.default_profile_id \
-                                              WHERE up.username COLLATE utf8mb4_unicode_ci = '%{User-Name}' COLLATE utf8mb4_unicode_ci \
+                                              WHERE up.username = '%{User-Name}' \
                                               LIMIT 1), 1, 0) \
                                         FROM radusagestats \
-                                        WHERE username COLLATE utf8mb4_unicode_ci = '%{User-Name}' COLLATE utf8mb4_unicode_ci \
-                                        AND day >= DATE_FORMAT(NOW(), CONCAT('%Y-%m-',LPAD((SELECT up.quota_reset_day FROM raduserprofile up WHERE up.username COLLATE utf8mb4_unicode_ci = '%{User-Name}' COLLATE utf8mb4_unicode_ci), 2, '0'))) }"
+                                        WHERE username = '%{User-Name}' \
+                                        AND day >= DATE_FORMAT(NOW(), CONCAT('%Y-%m-',LPAD((SELECT up.quota_reset_day FROM raduserprofile up WHERE up.username = '%{User-Name}'), 2, '0'))) }"
                 }
 
                 update request {
@@ -401,12 +401,12 @@ server default {
                                             (SELECT COALESCE(dp.daily_quota, cp.daily_quota) \
                                                FROM raduserprofile up \
                                                JOIN radprofile cp ON cp.id = up.profile_id \
-                                          LEFT JOIN user_default_profiles udp ON udp.username COLLATE utf8mb4_unicode_ci = up.username COLLATE utf8mb4_unicode_ci \
+                                          LEFT JOIN user_default_profiles udp ON udp.username = up.username \
                                           LEFT JOIN radprofile dp ON dp.id = udp.default_profile_id \
-                                              WHERE up.username COLLATE utf8mb4_unicode_ci = '%{User-Name}' COLLATE utf8mb4_unicode_ci \
+                                              WHERE up.username = '%{User-Name}' \
                                               LIMIT 1), 1, 0) \
                                         FROM radusagestats \
-                                        WHERE username COLLATE utf8mb4_unicode_ci = '%{User-Name}' COLLATE utf8mb4_unicode_ci \
+                                        WHERE username = '%{User-Name}' \
                                         AND day = CURDATE() }"
                 }
 
@@ -438,7 +438,7 @@ server default {
                       WHERE NOT EXISTS ( \
                         SELECT 1 FROM radacct \
                         WHERE acctsessionid = '%{Acct-Session-Id}' \
-                          AND username COLLATE utf8mb4_unicode_ci = '%{User-Name}' COLLATE utf8mb4_unicode_ci \
+                          AND username = '%{User-Name}' \
                           AND nasipaddress = '%{NAS-IP-Address}' \
                           AND acctstoptime IS NULL \
                       )}"
@@ -454,7 +454,7 @@ server default {
                         framedipaddress = '%{Framed-IP-Address}', \
                         acctterminatecause = '%{Acct-Terminate-Cause}' \
                       WHERE acctsessionid = '%{Acct-Session-Id}' \
-                        AND username COLLATE utf8mb4_unicode_ci = '%{User-Name}' COLLATE utf8mb4_unicode_ci \
+                        AND username = '%{User-Name}' \
                         AND nasipaddress = '%{NAS-IP-Address}' \
                         AND acctstoptime IS NULL}"
 
@@ -480,12 +480,12 @@ server default {
             if (&control:Free-Night != "1") {
                 "%{sql:UPDATE radusagestats r \
                       JOIN session_tracking st \
-                        ON st.username COLLATE utf8mb4_unicode_ci = r.username COLLATE utf8mb4_unicode_ci \
+                        ON st.username = r.username \
                        AND st.session_id = '%{Acct-Session-Id}' \
                       SET r.data_usage = r.data_usage \
-                          + GREATEST(((%{%{Acct-Input-Gigawords}:-0} * 4294967296) + %{%{Acct-Input-Octets}:-0}) - st.bytes_in, 0) \
-                          + GREATEST(((%{%{Acct-Output-Gigawords}:-0} * 4294967296) + %{%{Acct-Output-Octets}:-0}) - st.bytes_out, 0) \
-                      WHERE r.username COLLATE utf8mb4_unicode_ci = '%{User-Name}' COLLATE utf8mb4_unicode_ci \
+                          + GREATEST(CAST(((CAST(COALESCE(NULLIF('%{Acct-Input-Gigawords}', ''), '0') AS UNSIGNED) * 4294967296) + CAST(COALESCE(NULLIF('%{Acct-Input-Octets}', ''), '0') AS UNSIGNED)) AS SIGNED) - CAST(st.bytes_in AS SIGNED), 0) \
+                          + GREATEST(CAST(((CAST(COALESCE(NULLIF('%{Acct-Output-Gigawords}', ''), '0') AS UNSIGNED) * 4294967296) + CAST(COALESCE(NULLIF('%{Acct-Output-Octets}', ''), '0') AS UNSIGNED)) AS SIGNED) - CAST(st.bytes_out AS SIGNED), 0) \
+                      WHERE r.username = '%{User-Name}' \
                         AND r.day = CURDATE()}"
             }
 
@@ -494,28 +494,28 @@ server default {
                   (username, session_id, nas_ip, framed_ip, acct_status, bytes_in_total, bytes_out_total, delta_bytes_in, delta_bytes_out, delta_total, snapshot_at) \
                   SELECT \
                     '%{User-Name}', '%{Acct-Session-Id}', '%{NAS-IP-Address}', '%{Framed-IP-Address}', 'interim', \
-                    ((%{%{Acct-Input-Gigawords}:-0} * 4294967296) + %{%{Acct-Input-Octets}:-0}), \
-                    ((%{%{Acct-Output-Gigawords}:-0} * 4294967296) + %{%{Acct-Output-Octets}:-0}), \
-                    GREATEST(((%{%{Acct-Input-Gigawords}:-0} * 4294967296) + %{%{Acct-Input-Octets}:-0}) - st.bytes_in, 0), \
-                    GREATEST(((%{%{Acct-Output-Gigawords}:-0} * 4294967296) + %{%{Acct-Output-Octets}:-0}) - st.bytes_out, 0), \
-                    GREATEST(((%{%{Acct-Input-Gigawords}:-0} * 4294967296) + %{%{Acct-Input-Octets}:-0}) - st.bytes_in, 0) \
-                      + GREATEST(((%{%{Acct-Output-Gigawords}:-0} * 4294967296) + %{%{Acct-Output-Octets}:-0}) - st.bytes_out, 0), \
+                    ((CAST(COALESCE(NULLIF('%{Acct-Input-Gigawords}', ''), '0') AS UNSIGNED) * 4294967296) + CAST(COALESCE(NULLIF('%{Acct-Input-Octets}', ''), '0') AS UNSIGNED)), \
+                    ((CAST(COALESCE(NULLIF('%{Acct-Output-Gigawords}', ''), '0') AS UNSIGNED) * 4294967296) + CAST(COALESCE(NULLIF('%{Acct-Output-Octets}', ''), '0') AS UNSIGNED)), \
+                    GREATEST(CAST(((CAST(COALESCE(NULLIF('%{Acct-Input-Gigawords}', ''), '0') AS UNSIGNED) * 4294967296) + CAST(COALESCE(NULLIF('%{Acct-Input-Octets}', ''), '0') AS UNSIGNED)) AS SIGNED) - CAST(st.bytes_in AS SIGNED), 0), \
+                    GREATEST(CAST(((CAST(COALESCE(NULLIF('%{Acct-Output-Gigawords}', ''), '0') AS UNSIGNED) * 4294967296) + CAST(COALESCE(NULLIF('%{Acct-Output-Octets}', ''), '0') AS UNSIGNED)) AS SIGNED) - CAST(st.bytes_out AS SIGNED), 0), \
+                    GREATEST(CAST(((CAST(COALESCE(NULLIF('%{Acct-Input-Gigawords}', ''), '0') AS UNSIGNED) * 4294967296) + CAST(COALESCE(NULLIF('%{Acct-Input-Octets}', ''), '0') AS UNSIGNED)) AS SIGNED) - CAST(st.bytes_in AS SIGNED), 0) \
+                      + GREATEST(CAST(((CAST(COALESCE(NULLIF('%{Acct-Output-Gigawords}', ''), '0') AS UNSIGNED) * 4294967296) + CAST(COALESCE(NULLIF('%{Acct-Output-Octets}', ''), '0') AS UNSIGNED)) AS SIGNED) - CAST(st.bytes_out AS SIGNED), 0), \
                     NOW() \
                   FROM session_tracking st \
                   WHERE st.session_id = '%{Acct-Session-Id}' \
-                    AND st.username COLLATE utf8mb4_unicode_ci = '%{User-Name}' COLLATE utf8mb4_unicode_ci \
+                    AND st.username = '%{User-Name}' \
                     AND st.status = 'active' \
                   LIMIT 1}"
 
             # Persist latest counters
             "%{sql: UPDATE session_tracking \
                    SET last_update = NOW(), \
-                       bytes_in = ((%{%{Acct-Input-Gigawords}:-0} * 4294967296) + %{%{Acct-Input-Octets}:-0}), \
-                       bytes_out = ((%{%{Acct-Output-Gigawords}:-0} * 4294967296) + %{%{Acct-Output-Octets}:-0}), \
-                       session_time = %{%{Acct-Session-Time}:-0} \
+                       bytes_in = ((CAST(COALESCE(NULLIF('%{Acct-Input-Gigawords}', ''), '0') AS UNSIGNED) * 4294967296) + CAST(COALESCE(NULLIF('%{Acct-Input-Octets}', ''), '0') AS UNSIGNED)), \
+                       bytes_out = ((CAST(COALESCE(NULLIF('%{Acct-Output-Gigawords}', ''), '0') AS UNSIGNED) * 4294967296) + CAST(COALESCE(NULLIF('%{Acct-Output-Octets}', ''), '0') AS UNSIGNED)), \
+                       session_time = COALESCE(NULLIF('%{Acct-Session-Time}', ''), 0) \
                  WHERE session_id = '%{Acct-Session-Id}' \
                    AND status = 'active' \
-                   AND username COLLATE utf8mb4_unicode_ci = '%{User-Name}' COLLATE utf8mb4_unicode_ci}"
+                   AND username = '%{User-Name}'}"
 
             # Update radacct row
             # (If start packet was missed, create the row here.)
@@ -538,7 +538,7 @@ server default {
                   WHERE NOT EXISTS ( \
                     SELECT 1 FROM radacct \
                     WHERE acctsessionid = '%{Acct-Session-Id}' \
-                      AND username COLLATE utf8mb4_unicode_ci = '%{User-Name}' COLLATE utf8mb4_unicode_ci \
+                      AND username = '%{User-Name}' \
                       AND nasipaddress = '%{NAS-IP-Address}' \
                       AND acctstoptime IS NULL \
                   )}"
@@ -552,7 +552,7 @@ server default {
                     callingstationid = '%{Calling-Station-Id}', \
                     framedipaddress = '%{Framed-IP-Address}' \
                   WHERE acctsessionid = '%{Acct-Session-Id}' \
-                    AND username COLLATE utf8mb4_unicode_ci = '%{User-Name}' COLLATE utf8mb4_unicode_ci \
+                    AND username = '%{User-Name}' \
                     AND nasipaddress = '%{NAS-IP-Address}' \
                     AND acctstoptime IS NULL}"
 
@@ -563,13 +563,13 @@ server default {
                                         (SELECT COALESCE(dp.monthly_quota, cp.monthly_quota) \
                                            FROM raduserprofile up \
                                            JOIN radprofile cp ON cp.id = up.profile_id \
-                                      LEFT JOIN user_default_profiles udp ON udp.username COLLATE utf8mb4_unicode_ci = up.username COLLATE utf8mb4_unicode_ci \
+                                      LEFT JOIN user_default_profiles udp ON udp.username = up.username \
                                       LEFT JOIN radprofile dp ON dp.id = udp.default_profile_id \
-                                          WHERE up.username COLLATE utf8mb4_unicode_ci = '%{User-Name}' COLLATE utf8mb4_unicode_ci \
+                                          WHERE up.username = '%{User-Name}' \
                                           LIMIT 1), 1, 0) \
                                     FROM radusagestats \
-                                    WHERE username COLLATE utf8mb4_unicode_ci = '%{User-Name}' COLLATE utf8mb4_unicode_ci \
-                                    AND day >= DATE_FORMAT(NOW(), CONCAT('%Y-%m-',LPAD((SELECT up.quota_reset_day FROM raduserprofile up WHERE up.username COLLATE utf8mb4_unicode_ci = '%{User-Name}' COLLATE utf8mb4_unicode_ci), 2, '0'))) }"
+                                    WHERE username = '%{User-Name}' \
+                                    AND day >= DATE_FORMAT(NOW(), CONCAT('%Y-%m-',LPAD((SELECT up.quota_reset_day FROM raduserprofile up WHERE up.username = '%{User-Name}'), 2, '0'))) }"
             }
 
             # Check if user has exceeded their daily quota (compare against default/original plan quota).
@@ -579,12 +579,12 @@ server default {
                                         (SELECT COALESCE(dp.daily_quota, cp.daily_quota) \
                                            FROM raduserprofile up \
                                            JOIN radprofile cp ON cp.id = up.profile_id \
-                                      LEFT JOIN user_default_profiles udp ON udp.username COLLATE utf8mb4_unicode_ci = up.username COLLATE utf8mb4_unicode_ci \
+                                      LEFT JOIN user_default_profiles udp ON udp.username = up.username \
                                       LEFT JOIN radprofile dp ON dp.id = udp.default_profile_id \
-                                          WHERE up.username COLLATE utf8mb4_unicode_ci = '%{User-Name}' COLLATE utf8mb4_unicode_ci \
+                                          WHERE up.username = '%{User-Name}' \
                                           LIMIT 1), 1, 0) \
                                     FROM radusagestats \
-                                    WHERE username COLLATE utf8mb4_unicode_ci = '%{User-Name}' COLLATE utf8mb4_unicode_ci \
+                                    WHERE username = '%{User-Name}' \
                                     AND day = CURDATE() }"
             }
 
@@ -592,7 +592,7 @@ server default {
             update request {
                 Tmp-Integer-2 := "%{sql:SELECT IF(COALESCE(is_fallback,0)=1 OR COALESCE(is_monthly_exceeded,0)=1, 1, 0) \
                                     FROM raduserprofile \
-                                    WHERE username COLLATE utf8mb4_unicode_ci = '%{User-Name}' COLLATE utf8mb4_unicode_ci \
+                                    WHERE username = '%{User-Name}' \
                                     LIMIT 1}"
             }
 
