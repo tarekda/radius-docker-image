@@ -48,6 +48,7 @@ sql {
                                      WHERE r2.username = up.username \
                                        AND r2.day >= ( \
                                          SELECT CASE \
+                                           WHEN up2.quota_cycle_start_date IS NOT NULL THEN up2.quota_cycle_start_date \
                                            WHEN DAY(NOW()) >= up2.quota_reset_day \
                                              THEN DATE(CONCAT(YEAR(NOW()), '-', LPAD(MONTH(NOW()), 2, '0'), '-', LPAD(up2.quota_reset_day, 2, '0'))) \
                                            ELSE DATE(CONCAT(YEAR(DATE_SUB(NOW(), INTERVAL 1 MONTH)), '-', LPAD(MONTH(DATE_SUB(NOW(), INTERVAL 1 MONTH)), 2, '0'), '-', LPAD(up2.quota_reset_day, 2, '0'))) \
@@ -68,6 +69,7 @@ sql {
                                      WHERE r2.username = up.username \
                                        AND r2.day >= ( \
                                          SELECT CASE \
+                                           WHEN up2.quota_cycle_start_date IS NOT NULL THEN up2.quota_cycle_start_date \
                                            WHEN DAY(NOW()) >= up2.quota_reset_day \
                                              THEN DATE(CONCAT(YEAR(NOW()), '-', LPAD(MONTH(NOW()), 2, '0'), '-', LPAD(up2.quota_reset_day, 2, '0'))) \
                                            ELSE DATE(CONCAT(YEAR(DATE_SUB(NOW(), INTERVAL 1 MONTH)), '-', LPAD(MONTH(DATE_SUB(NOW(), INTERVAL 1 MONTH)), 2, '0'), '-', LPAD(up2.quota_reset_day, 2, '0'))) \

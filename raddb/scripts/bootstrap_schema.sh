@@ -60,12 +60,52 @@ ALTER TABLE raduserprofile
   ADD COLUMN expiry_framed_ip VARCHAR(45) NULL DEFAULT NULL;
 " || true
 
+# Optional manual monthly billing cycle anchor (backend + FreeRADIUS monthly window).
+mysql_exec "
+ALTER TABLE raduserprofile
+  ADD COLUMN quota_cycle_start_date DATE NULL DEFAULT NULL;
+" || true
+
 # Legacy DBs may have CHECK on account_status that omits 'expired' / 'terminated', which breaks
 # RADIUS + backend expiry updates. Safe to drop: app + FreeRADIUS enforce allowed values.
 # If this fails (unknown constraint name), list CHECKs and adjust — see mysql/alter_raduserprofile_expiry.sql
 mysql_exec "
 ALTER TABLE raduserprofile DROP CHECK raduserprofile_chk_1;
 " || true
+
+echo "[bootstrap] Deduplicating Fallback profiles (legacy DBs without unique index)..."
+
+# Legacy deployments may have accumulated duplicate rows named 'Fallback' because
+# bootstrap INSERT ran on every container start before uq_radprofile_profile_name existed.
+mysql_exec "
+SET @keep_id := (SELECT MIN(id) FROM radprofile WHERE profile_name = 'Fallback');
+UPDATE raduserprofile
+   SET profile_id = @keep_id
+ WHERE @keep_id IS NOT NULL
+   AND profile_id IN (
+     SELECT id FROM (
+       SELECT id FROM radprofile WHERE profile_name = 'Fallback' AND id <> @keep_id
+     ) AS dup_profiles
+   );
+UPDATE user_default_profiles
+   SET default_profile_id = @keep_id
+ WHERE @keep_id IS NOT NULL
+   AND default_profile_id IN (
+     SELECT id FROM (
+       SELECT id FROM radprofile WHERE profile_name = 'Fallback' AND id <> @keep_id
+     ) AS dup_profiles
+   );
+DELETE FROM radprofile
+ WHERE profile_name = 'Fallback'
+   AND @keep_id IS NOT NULL
+   AND id <> @keep_id;
+" || true
+
+idx_count="$(mysql_one "SELECT COUNT(*) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'radprofile' AND INDEX_NAME = 'uq_radprofile_profile_name';")"
+if [ "${idx_count:-0}" = "0" ]; then
+  echo "[bootstrap] Adding unique index on radprofile.profile_name..."
+  mysql_exec "ALTER TABLE radprofile ADD UNIQUE KEY uq_radprofile_profile_name (profile_name);" || true
+fi
 
 echo "[bootstrap] Ensuring Fallback (FUP) profile speed is 2048k..."
 
@@ -79,6 +119,13 @@ ON DUPLICATE KEY UPDATE
   speed_down = VALUES(speed_down),
   speed_up = VALUES(speed_up);
 " || true
+
+patch_sql="${SCRIPT_DIR}/patch_quota_procedures.sql"
+if [ -f "$patch_sql" ]; then
+  echo "[bootstrap] Updating quota procedures (prevent duplicate exceeded logs)..."
+  ensure_mysql_defaults
+  mysql --defaults-extra-file="$MYSQL_DEFAULTS_FILE" < "$patch_sql" 2>/dev/null || true
+fi
 
 echo "[bootstrap] Done."
 

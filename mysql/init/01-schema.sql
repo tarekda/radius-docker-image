@@ -40,6 +40,7 @@ CREATE TABLE raduserprofile (
     is_fallback TINYINT(1) DEFAULT 0,
     is_monthly_exceeded TINYINT(1) DEFAULT 0,
     quota_reset_day INT DEFAULT 1,
+    quota_cycle_start_date DATE NULL DEFAULT NULL,
     account_status VARCHAR(20) DEFAULT 'active',
     expires_at DATETIME NULL DEFAULT NULL,
     expiry_framed_ip VARCHAR(45) NULL DEFAULT NULL,
@@ -260,19 +261,30 @@ CREATE PROCEDURE sp_handle_quota_exceeded(
     IN p_username VARCHAR(64),
     IN p_quota_type VARCHAR(10)
 )
-BEGIN
+proc: BEGIN
     DECLARE v_fallback_profile_id INT;
     DECLARE v_current_profile_id INT;
+    DECLARE v_is_monthly_exceeded TINYINT DEFAULT 0;
+    DECLARE v_is_fallback TINYINT DEFAULT 0;
 
     SELECT id INTO v_fallback_profile_id
     FROM radprofile
     WHERE profile_name = 'Fallback'
     LIMIT 1;
 
-    SELECT profile_id INTO v_current_profile_id
+    SELECT profile_id, COALESCE(is_monthly_exceeded, 0), COALESCE(is_fallback, 0)
+    INTO v_current_profile_id, v_is_monthly_exceeded, v_is_fallback
     FROM raduserprofile
     WHERE username = p_username
     LIMIT 1;
+
+    -- Already marked exceeded for this quota type; skip redundant updates/logs.
+    IF LOWER(p_quota_type) = 'monthly' AND v_is_monthly_exceeded = 1 THEN
+        LEAVE proc;
+    END IF;
+    IF LOWER(p_quota_type) = 'daily' AND v_is_fallback = 1 THEN
+        LEAVE proc;
+    END IF;
 
     -- Save the user's normal profile for later restore (avoid overwriting with fallback)
     IF v_current_profile_id IS NOT NULL AND (v_fallback_profile_id IS NULL OR v_current_profile_id <> v_fallback_profile_id) THEN
@@ -286,11 +298,17 @@ BEGIN
     SET profile_id = v_fallback_profile_id,
         is_monthly_exceeded = IF(LOWER(p_quota_type) = 'monthly', 1, is_monthly_exceeded),
         is_fallback = IF(LOWER(p_quota_type) = 'daily', 1, is_fallback)
-    WHERE username = p_username;
+    WHERE username = p_username
+      AND (
+        (LOWER(p_quota_type) = 'monthly' AND COALESCE(is_monthly_exceeded, 0) = 0)
+        OR (LOWER(p_quota_type) = 'daily' AND COALESCE(is_fallback, 0) = 0)
+      );
     
-    -- Log the event
-    INSERT INTO quota_logs (username, event_type, quota_type, timestamp) 
-    VALUES (p_username, 'exceeded', p_quota_type, NOW());
+    -- Log only when we actually transitioned (avoids duplicate rows under concurrency).
+    IF ROW_COUNT() > 0 THEN
+        INSERT INTO quota_logs (username, event_type, quota_type, timestamp) 
+        VALUES (p_username, 'exceeded', p_quota_type, NOW());
+    END IF;
 END //
 
 DELIMITER ;

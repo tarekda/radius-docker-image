@@ -1,5 +1,6 @@
 #!/bin/bash
-# update_fallback.sh: Update raduserprofile for a given username
+# update_fallback.sh: Legacy helper — sets is_fallback only (profile switch is done by stored procedures).
+# Does NOT write quota_logs (procedures are the single source of truth for exceeded events).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -13,5 +14,9 @@ fi
 
 u="$(sql_escape "$USERNAME")"
 
+already="$(mysql_one "SELECT COALESCE(is_fallback, 0) FROM raduserprofile WHERE username = '${u}' LIMIT 1;")"
+if [ "${already:-0}" = "1" ]; then
+  exit 0
+fi
+
 mysql_exec "UPDATE raduserprofile SET is_fallback = 1 WHERE username = '${u}';" || true
-mysql_exec "INSERT INTO quota_logs (username, event_type, quota_type, timestamp) VALUES ('${u}', 'exceeded', 'daily', NOW());" || true

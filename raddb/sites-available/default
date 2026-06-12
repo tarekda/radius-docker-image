@@ -392,7 +392,12 @@ server default {
                                               LIMIT 1), 1, 0) \
                                         FROM radusagestats \
                                         WHERE username = '%{User-Name}' \
-                                        AND day >= DATE_FORMAT(NOW(), CONCAT('%Y-%m-',LPAD((SELECT up.quota_reset_day FROM raduserprofile up WHERE up.username = '%{User-Name}'), 2, '0'))) }"
+                                        AND day >= (SELECT CASE \
+                                          WHEN up.quota_cycle_start_date IS NOT NULL THEN up.quota_cycle_start_date \
+                                          WHEN DAY(NOW()) >= up.quota_reset_day \
+                                            THEN DATE(CONCAT(YEAR(NOW()), '-', LPAD(MONTH(NOW()), 2, '0'), '-', LPAD(up.quota_reset_day, 2, '0'))) \
+                                          ELSE DATE(CONCAT(YEAR(DATE_SUB(NOW(), INTERVAL 1 MONTH)), '-', LPAD(MONTH(DATE_SUB(NOW(), INTERVAL 1 MONTH)), 2, '0'), '-', LPAD(up.quota_reset_day, 2, '0'))) \
+                                        END FROM raduserprofile up WHERE up.username = '%{User-Name}') }"
                 }
 
                 update request {
@@ -410,11 +415,23 @@ server default {
                                         AND day = CURDATE() }"
                 }
 
-                if (Tmp-Integer-0 == "1") {
-                    quota_monthly_exceeded_proc
+                # Skip quota procedures if user is already in fallback (matches Interim-Update guard).
+                update request {
+                    Tmp-Integer-2 := "%{sql:SELECT IF(COALESCE(is_fallback,0)=1 OR COALESCE(is_monthly_exceeded,0)=1, 1, 0) \
+                                        FROM raduserprofile \
+                                        WHERE username = '%{User-Name}' \
+                                        LIMIT 1}"
                 }
-                elsif (Tmp-Integer-1 == "1") {
-                    quota_daily_exceeded_proc
+
+                if (Tmp-Integer-0 == "1" || Tmp-Integer-1 == "1") {
+                    if (Tmp-Integer-2 == "0") {
+                        if (Tmp-Integer-0 == "1") {
+                            quota_monthly_exceeded_proc
+                        }
+                        elsif (Tmp-Integer-1 == "1") {
+                            quota_daily_exceeded_proc
+                        }
+                    }
                 }
 
                 # Close radacct row
@@ -569,7 +586,12 @@ server default {
                                           LIMIT 1), 1, 0) \
                                     FROM radusagestats \
                                     WHERE username = '%{User-Name}' \
-                                    AND day >= DATE_FORMAT(NOW(), CONCAT('%Y-%m-',LPAD((SELECT up.quota_reset_day FROM raduserprofile up WHERE up.username = '%{User-Name}'), 2, '0'))) }"
+                                    AND day >= (SELECT CASE \
+                                      WHEN up.quota_cycle_start_date IS NOT NULL THEN up.quota_cycle_start_date \
+                                      WHEN DAY(NOW()) >= up.quota_reset_day \
+                                        THEN DATE(CONCAT(YEAR(NOW()), '-', LPAD(MONTH(NOW()), 2, '0'), '-', LPAD(up.quota_reset_day, 2, '0'))) \
+                                      ELSE DATE(CONCAT(YEAR(DATE_SUB(NOW(), INTERVAL 1 MONTH)), '-', LPAD(MONTH(DATE_SUB(NOW(), INTERVAL 1 MONTH)), 2, '0'), '-', LPAD(up.quota_reset_day, 2, '0'))) \
+                                    END FROM raduserprofile up WHERE up.username = '%{User-Name}') }"
             }
 
             # Check if user has exceeded their daily quota (compare against default/original plan quota).

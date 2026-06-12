@@ -152,24 +152,31 @@ DELIMITER //
 CREATE PROCEDURE sp_handle_daily_quota_exceeded(
     IN p_username VARCHAR(64)
 )
-BEGIN
+proc: BEGIN
     DECLARE v_profile_id INT;
     DECLARE v_daily_quota BIGINT;
     DECLARE v_data_usage BIGINT;
     DECLARE v_fallback_profile_id INT;
+    DECLARE v_is_fallback TINYINT DEFAULT 0;
 
     -- Get the user's current profile and the daily quota from the *default/original* profile.
     -- IMPORTANT: when a user is already on the "Fallback" profile, we must NOT start
     -- comparing usage against the fallback quotas, otherwise users can get "stuck" in FUP.
     SELECT
         rup.profile_id,
-        COALESCE(rp_default.daily_quota, rp_current.daily_quota)
-    INTO v_profile_id, v_daily_quota
+        COALESCE(rp_default.daily_quota, rp_current.daily_quota),
+        COALESCE(rup.is_fallback, 0)
+    INTO v_profile_id, v_daily_quota, v_is_fallback
     FROM raduserprofile rup
     JOIN radprofile rp_current ON rup.profile_id = rp_current.id
     LEFT JOIN user_default_profiles udp ON BINARY udp.username = BINARY rup.username
     LEFT JOIN radprofile rp_default ON rp_default.id = udp.default_profile_id
     WHERE rup.username = p_username;
+
+    -- Already in daily FUP; skip redundant updates/logs.
+    IF v_is_fallback = 1 THEN
+        LEAVE proc;
+    END IF;
 
     SELECT id INTO v_fallback_profile_id
     FROM radprofile
@@ -195,11 +202,14 @@ BEGIN
         UPDATE raduserprofile
         SET profile_id = v_fallback_profile_id,
             is_fallback = 1
-        WHERE username = p_username;
+        WHERE username = p_username
+          AND COALESCE(is_fallback, 0) = 0;
 
-        -- Log the event
-        INSERT INTO quota_logs (username, event_type, quota_type, timestamp) 
-        VALUES (p_username, 'exceeded', 'daily', NOW());
+        -- Log only when we actually transitioned (avoids duplicate rows under concurrency).
+        IF ROW_COUNT() > 0 THEN
+            INSERT INTO quota_logs (username, event_type, quota_type, timestamp) 
+            VALUES (p_username, 'exceeded', 'daily', NOW());
+        END IF;
     END IF;
 END //
 
