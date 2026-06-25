@@ -78,35 +78,6 @@ BEGIN
     DROP TEMPORARY TABLE IF EXISTS tmp_monthly_resets;
 END //
 
--- Procedure to kill active sessions
-CREATE PROCEDURE kill_session(IN p_username VARCHAR(64))
-BEGIN
-    UPDATE session_tracking 
-    SET status = 'terminated', 
-        end_time = NOW() 
-    WHERE username = p_username 
-    AND status = 'active';
-END //
-
-CREATE PROCEDURE sp_get_online_users()
-BEGIN
-    SELECT 
-        ra.username,
-        ra.framedipaddress as ip_address,
-        ra.callingstationid as mac_address,
-        ra.acctstarttime as start_time,
-        TIMEDIFF(NOW(), ra.acctstarttime) as duration,
-        ROUND(ra.acctinputoctets/1048576, 2) as download_mb,
-        ROUND(ra.acctoutputoctets/1048576, 2) as upload_mb,
-        up.account_status,
-        p.profile_name
-    FROM radacct ra
-    JOIN raduserprofile up ON ra.username = up.username
-    JOIN radprofile p ON up.profile_id = p.id
-    WHERE ra.acctstoptime IS NULL
-    ORDER BY ra.acctstarttime DESC;
-END //
-
 DELIMITER ;
 
 -- Create events

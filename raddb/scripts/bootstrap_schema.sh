@@ -13,6 +13,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 echo "[bootstrap] Ensuring schema objects exist..."
 
+# Drop legacy procedures removed from the solution (no runtime callers).
+mysql_exec "DROP PROCEDURE IF EXISTS kill_session;" || true
+mysql_exec "DROP PROCEDURE IF EXISTS sp_get_online_users;" || true
+
 # Keep this idempotent and safe. Avoid FK creation here (can fail on drifted schemas).
 mysql_exec "
 CREATE TABLE IF NOT EXISTS user_default_profiles (
