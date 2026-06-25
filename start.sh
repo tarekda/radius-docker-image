@@ -76,6 +76,10 @@ fi
 # Ensure scripts are executable (Windows hosts may strip +x during build/copy).
 chmod +x /opt/freeradius/3.0/scripts/*.sh >/dev/null 2>&1 || true
 
+# Secret for the loopback-only healthcheck client (clients.conf reads $ENV{HEALTHCHECK_SECRET}).
+# Must be set before FreeRADIUS starts or the client definition is invalid.
+export HEALTHCHECK_SECRET="${HEALTHCHECK_SECRET:-radius-healthcheck}"
+
 # Ensure new schema objects exist on existing DBs (idempotent).
 /opt/freeradius/3.0/scripts/bootstrap_schema.sh || true
 

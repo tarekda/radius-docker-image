@@ -4,34 +4,78 @@ USE radius;
 -- Set delimiter for procedures
 DELIMITER //
 
--- Procedure to reset monthly quotas
-CREATE PROCEDURE reset_monthly_quotas()
-proc: BEGIN
-    DECLARE current_day INT;
-    SET current_day = DAY(NOW());
+-- Start date of the user's current monthly quota window.
+-- NOTE: the authoritative definition lives in raddb/scripts/patch_quota_cycle.sql
+-- (applied on every container start). Keep this in sync for fresh installs.
+-- - quota_cycle_start_date (manual anchor, refreshed by the backend on renewal) wins when set.
+-- - Otherwise: most recent occurrence of quota_reset_day, clamped to the month length
+--   (day 31 -> Feb 28), so short months never produce an invalid window.
+CREATE FUNCTION fn_quota_cycle_start(p_username VARCHAR(64))
+RETURNS DATE
+NOT DETERMINISTIC
+READS SQL DATA
+BEGIN
+    DECLARE v_anchor DATE DEFAULT NULL;
+    DECLARE v_reset_day INT DEFAULT 1;
+    DECLARE v_candidate DATE;
+    DECLARE v_prev_first DATE;
 
-    -- Global monthly reset: only run on the 1st day of the month (00:00).
-    IF current_day <> 1 THEN
-        LEAVE proc;
+    SELECT quota_cycle_start_date, COALESCE(quota_reset_day, 1)
+      INTO v_anchor, v_reset_day
+      FROM raduserprofile
+     WHERE username = p_username
+     LIMIT 1;
+
+    IF v_anchor IS NOT NULL THEN
+        RETURN v_anchor;
     END IF;
-    
-    -- Reset quotas for all users who were monthly-exceeded
-    UPDATE raduserprofile
-    SET is_monthly_exceeded = 0,
-        is_fallback = 0,
-        profile_id = (
-            SELECT default_profile_id 
-            FROM user_default_profiles 
-            WHERE user_default_profiles.username = raduserprofile.username
-        )
-    WHERE is_monthly_exceeded = 1;
-    
-    -- Log reset events
-    INSERT INTO quota_logs (username, event_type, quota_type, timestamp, details)
-    SELECT username, 'reset', 'monthly', NOW(), 
-           CONCAT('Monthly quota reset on day ', current_day)
-    FROM raduserprofile
-    WHERE is_monthly_exceeded = 0;
+
+    SET v_candidate = DATE_ADD(
+        DATE_FORMAT(CURDATE(), '%Y-%m-01'),
+        INTERVAL LEAST(v_reset_day, DAY(LAST_DAY(CURDATE()))) - 1 DAY
+    );
+    IF v_candidate <= CURDATE() THEN
+        RETURN v_candidate;
+    END IF;
+
+    SET v_prev_first = DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL 1 MONTH), '%Y-%m-01');
+    RETURN DATE_ADD(
+        v_prev_first,
+        INTERVAL LEAST(v_reset_day, DAY(LAST_DAY(v_prev_first))) - 1 DAY
+    );
+END //
+
+-- Procedure to reset monthly quotas.
+-- NOTE: the authoritative definition lives in raddb/scripts/patch_quota_cycle.sql
+-- (applied on every container start). Keep this in sync for fresh installs.
+-- Restores users on *their* cycle boundary (per-user quota_reset_day / manual
+-- anchor via fn_quota_cycle_start), not globally on day 1.
+CREATE PROCEDURE reset_monthly_quotas()
+BEGIN
+    -- Materialize the user set first: MySQL forbids calling a function that reads
+    -- raduserprofile from within an UPDATE of raduserprofile (error 1442).
+    DROP TEMPORARY TABLE IF EXISTS tmp_monthly_resets;
+    CREATE TEMPORARY TABLE tmp_monthly_resets AS
+      SELECT username FROM raduserprofile
+      WHERE COALESCE(is_monthly_exceeded, 0) = 1
+        AND fn_quota_cycle_start(username) = CURDATE();
+
+    -- NOTE: quota_logs has no `details` column (the old proc referenced one and
+    -- failed silently at runtime). Keep the insert aligned with the live schema.
+    INSERT INTO quota_logs (username, event_type, quota_type, timestamp)
+    SELECT username, 'reset', 'monthly', NOW()
+    FROM tmp_monthly_resets;
+
+    UPDATE raduserprofile up
+    JOIN tmp_monthly_resets t
+      ON BINARY t.username = BINARY up.username
+    LEFT JOIN user_default_profiles udp
+      ON BINARY udp.username = BINARY up.username
+    SET up.is_monthly_exceeded = 0,
+        up.is_fallback = 0,
+        up.profile_id = COALESCE(udp.default_profile_id, up.profile_id);
+
+    DROP TEMPORARY TABLE IF EXISTS tmp_monthly_resets;
 END //
 
 -- Procedure to kill active sessions
@@ -109,28 +153,28 @@ SELECT
 FROM session_tracking
 GROUP BY username;
 
--- Add new view for remaining quota
+-- Add new view for remaining quota (window aligned with enforcement via fn_quota_cycle_start)
+-- Always show quotas based on the user's default/original profile when available,
+-- not the current profile (which may be "Fallback").
+-- Aggregates (MAX) keep the view valid under only_full_group_by (MySQL 8 default).
 CREATE OR REPLACE VIEW remaining_quota AS
-SELECT 
+SELECT
     u.username,
-    -- Always show quotas based on the user's default/original profile when available,
-    -- not the current profile (which may be "Fallback").
-    COALESCE(p_default.monthly_quota, p.monthly_quota) as total_quota,
-    COALESCE(p_default.monthly_quota, p.monthly_quota) - COALESCE(SUM(s.data_usage), 0) as remaining_quota,
-    u.quota_reset_day as reset_day,
-    CASE 
+    MAX(COALESCE(p_default.monthly_quota, p.monthly_quota)) as total_quota,
+    MAX(COALESCE(p_default.monthly_quota, p.monthly_quota)) - COALESCE(SUM(s.data_usage), 0) as remaining_quota,
+    MAX(u.quota_reset_day) as reset_day,
+    MAX(CASE
         WHEN u.is_monthly_exceeded = 1 THEN 'Exceeded'
         ELSE u.account_status
-    END as quota_status,
-    DATE_FORMAT(NOW(), CONCAT('%Y-%m-', LPAD(u.quota_reset_day, 2, '0'))) as last_reset_date,
-    DATE_FORMAT(DATE_ADD(NOW(), INTERVAL 1 MONTH), CONCAT('%Y-%m-', LPAD(u.quota_reset_day, 2, '0'))) as next_reset_date
+    END) as quota_status,
+    MAX(fn_quota_cycle_start(u.username)) as last_reset_date,
+    DATE_ADD(MAX(fn_quota_cycle_start(u.username)), INTERVAL 1 MONTH) as next_reset_date
 FROM raduserprofile u
 JOIN radprofile p ON u.profile_id = p.id
 LEFT JOIN user_default_profiles udp ON BINARY udp.username = BINARY u.username
 LEFT JOIN radprofile p_default ON p_default.id = udp.default_profile_id
 LEFT JOIN radusagestats s ON u.username = s.username
-    AND s.day >= DATE_FORMAT(NOW(), 
-        CONCAT('%Y-%m-', LPAD(u.quota_reset_day, 2, '0')))
+    AND s.day >= fn_quota_cycle_start(u.username)
 GROUP BY u.username; 
 
 -- Add view for online users

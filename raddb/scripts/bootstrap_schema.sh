@@ -127,5 +127,44 @@ if [ -f "$patch_sql" ]; then
   mysql --defaults-extra-file="$MYSQL_DEFAULTS_FILE" < "$patch_sql" 2>/dev/null || true
 fi
 
+# Quota cycle window function + per-user monthly reset + aligned remaining_quota view.
+patch_sql="${SCRIPT_DIR}/patch_quota_cycle.sql"
+if [ -f "$patch_sql" ]; then
+  echo "[bootstrap] Updating quota cycle function/procedures/view..."
+  ensure_mysql_defaults
+  mysql --defaults-extra-file="$MYSQL_DEFAULTS_FILE" < "$patch_sql" 2>/dev/null || true
+
+  # The accounting flow depends on this function; fail LOUDLY if it's missing.
+  # Most common cause: binary logging enabled without log_bin_trust_function_creators=1
+  # and a non-SUPER SQL user (see mysql/conf.d/my.cnf).
+  fn_count="$(mysql_one "SELECT COUNT(*) FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA = DATABASE() AND ROUTINE_NAME = 'fn_quota_cycle_start';")"
+  if [ "${fn_count:-0}" = "0" ]; then
+    echo "[bootstrap] ERROR: fn_quota_cycle_start was NOT created — monthly quota checks WILL fail." >&2
+    echo "[bootstrap] Set log_bin_trust_function_creators=1 on the MySQL server, or grant the SQL user function-creation rights, then restart." >&2
+  fi
+fi
+
+# Indexes that keep the nightly purge cheap (skip if already present).
+for spec in \
+  "session_usage_snapshots:snapshot_at:idx_sus_snapshot_at" \
+  "detailed_usage:timestamp:idx_du_timestamp" \
+  "connection_logs:timestamp:idx_cl_timestamp" \
+  "quota_logs:timestamp:idx_ql_timestamp"; do
+  tbl="${spec%%:*}"; rest="${spec#*:}"; col="${rest%%:*}"; idx="${rest#*:}"
+  idx_count="$(mysql_one "SELECT COUNT(*) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '${tbl}' AND INDEX_NAME = '${idx}';")"
+  if [ "${idx_count:-0}" = "0" ]; then
+    echo "[bootstrap] Adding index ${idx} on ${tbl}(${col})..."
+    mysql_exec "ALTER TABLE ${tbl} ADD INDEX ${idx} (\`${col}\`);" || true
+  fi
+done
+
+# Log retention: purge procedure + nightly event.
+patch_sql="${SCRIPT_DIR}/patch_log_retention.sql"
+if [ -f "$patch_sql" ]; then
+  echo "[bootstrap] Updating log retention purge procedure/event..."
+  ensure_mysql_defaults
+  mysql --defaults-extra-file="$MYSQL_DEFAULTS_FILE" < "$patch_sql" 2>/dev/null || true
+fi
+
 echo "[bootstrap] Done."
 

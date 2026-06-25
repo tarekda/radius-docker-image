@@ -1,11 +1,9 @@
 #!/bin/bash
-
-#echo $((86400 - $(date +%s) % 86400))
-# Get the current time in seconds since midnight
-current_time=$(date +%s)
-# Get the current time in seconds since the beginning of the day
-seconds_since_midnight=$(( current_time % 86400 ))
-# Calculate remaining seconds until midnight
-remaining_seconds=$(( 86400 - seconds_since_midnight ))
-# Print the result
-echo $remaining_seconds
+# Print seconds until the next LOCAL midnight (used as Session-Timeout so
+# sessions re-authenticate right after the daily quota reset).
+#
+# NOTE: the old `date +%s % 86400` math measured seconds since *UTC* midnight,
+# which with TZ=Asia/Beirut made sessions outlive the 00:00 local reset by ~3h.
+now=$(date +%s)
+midnight=$(date -d "tomorrow 00:00" +%s 2>/dev/null || date -d "tomorrow 00:00:00" +%s)
+echo $(( midnight - now ))

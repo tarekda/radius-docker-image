@@ -331,14 +331,16 @@ server default {
 
                 # Increment daily usage by delta since last update (handles sessions spanning midnight).
                 # Uses Gigawords to avoid 32-bit counter wrap.
+                # If the counter went BACKWARDS (NAS reboot / counter reset), treat the new
+                # absolute value as the delta instead of dropping it to 0.
                 if (&control:Free-Night != "1") {
                     "%{sql:UPDATE radusagestats r \
                           JOIN session_tracking st \
                             ON st.username = r.username \
                            AND st.session_id = '%{Acct-Session-Id}' \
                           SET r.data_usage = r.data_usage \
-                              + GREATEST(CAST(((CAST(COALESCE(NULLIF('%{Acct-Input-Gigawords}', ''), '0') AS UNSIGNED) * 4294967296) + CAST(COALESCE(NULLIF('%{Acct-Input-Octets}', ''), '0') AS UNSIGNED)) AS SIGNED) - CAST(st.bytes_in AS SIGNED), 0) \
-                              + GREATEST(CAST(((CAST(COALESCE(NULLIF('%{Acct-Output-Gigawords}', ''), '0') AS UNSIGNED) * 4294967296) + CAST(COALESCE(NULLIF('%{Acct-Output-Octets}', ''), '0') AS UNSIGNED)) AS SIGNED) - CAST(st.bytes_out AS SIGNED), 0) \
+                              + IF(CAST(((CAST(COALESCE(NULLIF('%{Acct-Input-Gigawords}', ''), '0') AS UNSIGNED) * 4294967296) + CAST(COALESCE(NULLIF('%{Acct-Input-Octets}', ''), '0') AS UNSIGNED)) AS SIGNED) < CAST(st.bytes_in AS SIGNED), CAST(((CAST(COALESCE(NULLIF('%{Acct-Input-Gigawords}', ''), '0') AS UNSIGNED) * 4294967296) + CAST(COALESCE(NULLIF('%{Acct-Input-Octets}', ''), '0') AS UNSIGNED)) AS SIGNED), CAST(((CAST(COALESCE(NULLIF('%{Acct-Input-Gigawords}', ''), '0') AS UNSIGNED) * 4294967296) + CAST(COALESCE(NULLIF('%{Acct-Input-Octets}', ''), '0') AS UNSIGNED)) AS SIGNED) - CAST(st.bytes_in AS SIGNED)) \
+                              + IF(CAST(((CAST(COALESCE(NULLIF('%{Acct-Output-Gigawords}', ''), '0') AS UNSIGNED) * 4294967296) + CAST(COALESCE(NULLIF('%{Acct-Output-Octets}', ''), '0') AS UNSIGNED)) AS SIGNED) < CAST(st.bytes_out AS SIGNED), CAST(((CAST(COALESCE(NULLIF('%{Acct-Output-Gigawords}', ''), '0') AS UNSIGNED) * 4294967296) + CAST(COALESCE(NULLIF('%{Acct-Output-Octets}', ''), '0') AS UNSIGNED)) AS SIGNED), CAST(((CAST(COALESCE(NULLIF('%{Acct-Output-Gigawords}', ''), '0') AS UNSIGNED) * 4294967296) + CAST(COALESCE(NULLIF('%{Acct-Output-Octets}', ''), '0') AS UNSIGNED)) AS SIGNED) - CAST(st.bytes_out AS SIGNED)) \
                           WHERE r.username = '%{User-Name}' \
                             AND r.day = CURDATE()}"
                 }
@@ -350,10 +352,10 @@ server default {
                         '%{User-Name}', '%{Acct-Session-Id}', '%{NAS-IP-Address}', '%{Framed-IP-Address}', 'stop', \
                         ((CAST(COALESCE(NULLIF('%{Acct-Input-Gigawords}', ''), '0') AS UNSIGNED) * 4294967296) + CAST(COALESCE(NULLIF('%{Acct-Input-Octets}', ''), '0') AS UNSIGNED)), \
                         ((CAST(COALESCE(NULLIF('%{Acct-Output-Gigawords}', ''), '0') AS UNSIGNED) * 4294967296) + CAST(COALESCE(NULLIF('%{Acct-Output-Octets}', ''), '0') AS UNSIGNED)), \
-                        GREATEST(CAST(((CAST(COALESCE(NULLIF('%{Acct-Input-Gigawords}', ''), '0') AS UNSIGNED) * 4294967296) + CAST(COALESCE(NULLIF('%{Acct-Input-Octets}', ''), '0') AS UNSIGNED)) AS SIGNED) - CAST(st.bytes_in AS SIGNED), 0), \
-                        GREATEST(CAST(((CAST(COALESCE(NULLIF('%{Acct-Output-Gigawords}', ''), '0') AS UNSIGNED) * 4294967296) + CAST(COALESCE(NULLIF('%{Acct-Output-Octets}', ''), '0') AS UNSIGNED)) AS SIGNED) - CAST(st.bytes_out AS SIGNED), 0), \
-                        GREATEST(CAST(((CAST(COALESCE(NULLIF('%{Acct-Input-Gigawords}', ''), '0') AS UNSIGNED) * 4294967296) + CAST(COALESCE(NULLIF('%{Acct-Input-Octets}', ''), '0') AS UNSIGNED)) AS SIGNED) - CAST(st.bytes_in AS SIGNED), 0) \
-                          + GREATEST(CAST(((CAST(COALESCE(NULLIF('%{Acct-Output-Gigawords}', ''), '0') AS UNSIGNED) * 4294967296) + CAST(COALESCE(NULLIF('%{Acct-Output-Octets}', ''), '0') AS UNSIGNED)) AS SIGNED) - CAST(st.bytes_out AS SIGNED), 0), \
+                        IF(CAST(((CAST(COALESCE(NULLIF('%{Acct-Input-Gigawords}', ''), '0') AS UNSIGNED) * 4294967296) + CAST(COALESCE(NULLIF('%{Acct-Input-Octets}', ''), '0') AS UNSIGNED)) AS SIGNED) < CAST(st.bytes_in AS SIGNED), CAST(((CAST(COALESCE(NULLIF('%{Acct-Input-Gigawords}', ''), '0') AS UNSIGNED) * 4294967296) + CAST(COALESCE(NULLIF('%{Acct-Input-Octets}', ''), '0') AS UNSIGNED)) AS SIGNED), CAST(((CAST(COALESCE(NULLIF('%{Acct-Input-Gigawords}', ''), '0') AS UNSIGNED) * 4294967296) + CAST(COALESCE(NULLIF('%{Acct-Input-Octets}', ''), '0') AS UNSIGNED)) AS SIGNED) - CAST(st.bytes_in AS SIGNED)), \
+                        IF(CAST(((CAST(COALESCE(NULLIF('%{Acct-Output-Gigawords}', ''), '0') AS UNSIGNED) * 4294967296) + CAST(COALESCE(NULLIF('%{Acct-Output-Octets}', ''), '0') AS UNSIGNED)) AS SIGNED) < CAST(st.bytes_out AS SIGNED), CAST(((CAST(COALESCE(NULLIF('%{Acct-Output-Gigawords}', ''), '0') AS UNSIGNED) * 4294967296) + CAST(COALESCE(NULLIF('%{Acct-Output-Octets}', ''), '0') AS UNSIGNED)) AS SIGNED), CAST(((CAST(COALESCE(NULLIF('%{Acct-Output-Gigawords}', ''), '0') AS UNSIGNED) * 4294967296) + CAST(COALESCE(NULLIF('%{Acct-Output-Octets}', ''), '0') AS UNSIGNED)) AS SIGNED) - CAST(st.bytes_out AS SIGNED)), \
+                        IF(CAST(((CAST(COALESCE(NULLIF('%{Acct-Input-Gigawords}', ''), '0') AS UNSIGNED) * 4294967296) + CAST(COALESCE(NULLIF('%{Acct-Input-Octets}', ''), '0') AS UNSIGNED)) AS SIGNED) < CAST(st.bytes_in AS SIGNED), CAST(((CAST(COALESCE(NULLIF('%{Acct-Input-Gigawords}', ''), '0') AS UNSIGNED) * 4294967296) + CAST(COALESCE(NULLIF('%{Acct-Input-Octets}', ''), '0') AS UNSIGNED)) AS SIGNED), CAST(((CAST(COALESCE(NULLIF('%{Acct-Input-Gigawords}', ''), '0') AS UNSIGNED) * 4294967296) + CAST(COALESCE(NULLIF('%{Acct-Input-Octets}', ''), '0') AS UNSIGNED)) AS SIGNED) - CAST(st.bytes_in AS SIGNED)) \
+                          + IF(CAST(((CAST(COALESCE(NULLIF('%{Acct-Output-Gigawords}', ''), '0') AS UNSIGNED) * 4294967296) + CAST(COALESCE(NULLIF('%{Acct-Output-Octets}', ''), '0') AS UNSIGNED)) AS SIGNED) < CAST(st.bytes_out AS SIGNED), CAST(((CAST(COALESCE(NULLIF('%{Acct-Output-Gigawords}', ''), '0') AS UNSIGNED) * 4294967296) + CAST(COALESCE(NULLIF('%{Acct-Output-Octets}', ''), '0') AS UNSIGNED)) AS SIGNED), CAST(((CAST(COALESCE(NULLIF('%{Acct-Output-Gigawords}', ''), '0') AS UNSIGNED) * 4294967296) + CAST(COALESCE(NULLIF('%{Acct-Output-Octets}', ''), '0') AS UNSIGNED)) AS SIGNED) - CAST(st.bytes_out AS SIGNED)), \
                         NOW() \
                       FROM session_tracking st \
                       WHERE st.session_id = '%{Acct-Session-Id}' \
@@ -392,12 +394,7 @@ server default {
                                               LIMIT 1), 1, 0) \
                                         FROM radusagestats \
                                         WHERE username = '%{User-Name}' \
-                                        AND day >= (SELECT CASE \
-                                          WHEN up.quota_cycle_start_date IS NOT NULL THEN up.quota_cycle_start_date \
-                                          WHEN DAY(NOW()) >= up.quota_reset_day \
-                                            THEN DATE(CONCAT(YEAR(NOW()), '-', LPAD(MONTH(NOW()), 2, '0'), '-', LPAD(up.quota_reset_day, 2, '0'))) \
-                                          ELSE DATE(CONCAT(YEAR(DATE_SUB(NOW(), INTERVAL 1 MONTH)), '-', LPAD(MONTH(DATE_SUB(NOW(), INTERVAL 1 MONTH)), 2, '0'), '-', LPAD(up.quota_reset_day, 2, '0'))) \
-                                        END FROM raduserprofile up WHERE up.username = '%{User-Name}') }"
+                                        AND day >= fn_quota_cycle_start('%{User-Name}') }"
                 }
 
                 update request {
@@ -494,14 +491,16 @@ server default {
 
             # Increment daily usage by delta since last update (handles sessions spanning midnight).
             # Uses Gigawords to avoid 32-bit counter wrap.
+            # If the counter went BACKWARDS (NAS reboot / counter reset), treat the new
+            # absolute value as the delta instead of dropping it to 0.
             if (&control:Free-Night != "1") {
                 "%{sql:UPDATE radusagestats r \
                       JOIN session_tracking st \
                         ON st.username = r.username \
                        AND st.session_id = '%{Acct-Session-Id}' \
                       SET r.data_usage = r.data_usage \
-                          + GREATEST(CAST(((CAST(COALESCE(NULLIF('%{Acct-Input-Gigawords}', ''), '0') AS UNSIGNED) * 4294967296) + CAST(COALESCE(NULLIF('%{Acct-Input-Octets}', ''), '0') AS UNSIGNED)) AS SIGNED) - CAST(st.bytes_in AS SIGNED), 0) \
-                          + GREATEST(CAST(((CAST(COALESCE(NULLIF('%{Acct-Output-Gigawords}', ''), '0') AS UNSIGNED) * 4294967296) + CAST(COALESCE(NULLIF('%{Acct-Output-Octets}', ''), '0') AS UNSIGNED)) AS SIGNED) - CAST(st.bytes_out AS SIGNED), 0) \
+                          + IF(CAST(((CAST(COALESCE(NULLIF('%{Acct-Input-Gigawords}', ''), '0') AS UNSIGNED) * 4294967296) + CAST(COALESCE(NULLIF('%{Acct-Input-Octets}', ''), '0') AS UNSIGNED)) AS SIGNED) < CAST(st.bytes_in AS SIGNED), CAST(((CAST(COALESCE(NULLIF('%{Acct-Input-Gigawords}', ''), '0') AS UNSIGNED) * 4294967296) + CAST(COALESCE(NULLIF('%{Acct-Input-Octets}', ''), '0') AS UNSIGNED)) AS SIGNED), CAST(((CAST(COALESCE(NULLIF('%{Acct-Input-Gigawords}', ''), '0') AS UNSIGNED) * 4294967296) + CAST(COALESCE(NULLIF('%{Acct-Input-Octets}', ''), '0') AS UNSIGNED)) AS SIGNED) - CAST(st.bytes_in AS SIGNED)) \
+                          + IF(CAST(((CAST(COALESCE(NULLIF('%{Acct-Output-Gigawords}', ''), '0') AS UNSIGNED) * 4294967296) + CAST(COALESCE(NULLIF('%{Acct-Output-Octets}', ''), '0') AS UNSIGNED)) AS SIGNED) < CAST(st.bytes_out AS SIGNED), CAST(((CAST(COALESCE(NULLIF('%{Acct-Output-Gigawords}', ''), '0') AS UNSIGNED) * 4294967296) + CAST(COALESCE(NULLIF('%{Acct-Output-Octets}', ''), '0') AS UNSIGNED)) AS SIGNED), CAST(((CAST(COALESCE(NULLIF('%{Acct-Output-Gigawords}', ''), '0') AS UNSIGNED) * 4294967296) + CAST(COALESCE(NULLIF('%{Acct-Output-Octets}', ''), '0') AS UNSIGNED)) AS SIGNED) - CAST(st.bytes_out AS SIGNED)) \
                       WHERE r.username = '%{User-Name}' \
                         AND r.day = CURDATE()}"
             }
@@ -513,10 +512,10 @@ server default {
                     '%{User-Name}', '%{Acct-Session-Id}', '%{NAS-IP-Address}', '%{Framed-IP-Address}', 'interim', \
                     ((CAST(COALESCE(NULLIF('%{Acct-Input-Gigawords}', ''), '0') AS UNSIGNED) * 4294967296) + CAST(COALESCE(NULLIF('%{Acct-Input-Octets}', ''), '0') AS UNSIGNED)), \
                     ((CAST(COALESCE(NULLIF('%{Acct-Output-Gigawords}', ''), '0') AS UNSIGNED) * 4294967296) + CAST(COALESCE(NULLIF('%{Acct-Output-Octets}', ''), '0') AS UNSIGNED)), \
-                    GREATEST(CAST(((CAST(COALESCE(NULLIF('%{Acct-Input-Gigawords}', ''), '0') AS UNSIGNED) * 4294967296) + CAST(COALESCE(NULLIF('%{Acct-Input-Octets}', ''), '0') AS UNSIGNED)) AS SIGNED) - CAST(st.bytes_in AS SIGNED), 0), \
-                    GREATEST(CAST(((CAST(COALESCE(NULLIF('%{Acct-Output-Gigawords}', ''), '0') AS UNSIGNED) * 4294967296) + CAST(COALESCE(NULLIF('%{Acct-Output-Octets}', ''), '0') AS UNSIGNED)) AS SIGNED) - CAST(st.bytes_out AS SIGNED), 0), \
-                    GREATEST(CAST(((CAST(COALESCE(NULLIF('%{Acct-Input-Gigawords}', ''), '0') AS UNSIGNED) * 4294967296) + CAST(COALESCE(NULLIF('%{Acct-Input-Octets}', ''), '0') AS UNSIGNED)) AS SIGNED) - CAST(st.bytes_in AS SIGNED), 0) \
-                      + GREATEST(CAST(((CAST(COALESCE(NULLIF('%{Acct-Output-Gigawords}', ''), '0') AS UNSIGNED) * 4294967296) + CAST(COALESCE(NULLIF('%{Acct-Output-Octets}', ''), '0') AS UNSIGNED)) AS SIGNED) - CAST(st.bytes_out AS SIGNED), 0), \
+                    IF(CAST(((CAST(COALESCE(NULLIF('%{Acct-Input-Gigawords}', ''), '0') AS UNSIGNED) * 4294967296) + CAST(COALESCE(NULLIF('%{Acct-Input-Octets}', ''), '0') AS UNSIGNED)) AS SIGNED) < CAST(st.bytes_in AS SIGNED), CAST(((CAST(COALESCE(NULLIF('%{Acct-Input-Gigawords}', ''), '0') AS UNSIGNED) * 4294967296) + CAST(COALESCE(NULLIF('%{Acct-Input-Octets}', ''), '0') AS UNSIGNED)) AS SIGNED), CAST(((CAST(COALESCE(NULLIF('%{Acct-Input-Gigawords}', ''), '0') AS UNSIGNED) * 4294967296) + CAST(COALESCE(NULLIF('%{Acct-Input-Octets}', ''), '0') AS UNSIGNED)) AS SIGNED) - CAST(st.bytes_in AS SIGNED)), \
+                    IF(CAST(((CAST(COALESCE(NULLIF('%{Acct-Output-Gigawords}', ''), '0') AS UNSIGNED) * 4294967296) + CAST(COALESCE(NULLIF('%{Acct-Output-Octets}', ''), '0') AS UNSIGNED)) AS SIGNED) < CAST(st.bytes_out AS SIGNED), CAST(((CAST(COALESCE(NULLIF('%{Acct-Output-Gigawords}', ''), '0') AS UNSIGNED) * 4294967296) + CAST(COALESCE(NULLIF('%{Acct-Output-Octets}', ''), '0') AS UNSIGNED)) AS SIGNED), CAST(((CAST(COALESCE(NULLIF('%{Acct-Output-Gigawords}', ''), '0') AS UNSIGNED) * 4294967296) + CAST(COALESCE(NULLIF('%{Acct-Output-Octets}', ''), '0') AS UNSIGNED)) AS SIGNED) - CAST(st.bytes_out AS SIGNED)), \
+                    IF(CAST(((CAST(COALESCE(NULLIF('%{Acct-Input-Gigawords}', ''), '0') AS UNSIGNED) * 4294967296) + CAST(COALESCE(NULLIF('%{Acct-Input-Octets}', ''), '0') AS UNSIGNED)) AS SIGNED) < CAST(st.bytes_in AS SIGNED), CAST(((CAST(COALESCE(NULLIF('%{Acct-Input-Gigawords}', ''), '0') AS UNSIGNED) * 4294967296) + CAST(COALESCE(NULLIF('%{Acct-Input-Octets}', ''), '0') AS UNSIGNED)) AS SIGNED), CAST(((CAST(COALESCE(NULLIF('%{Acct-Input-Gigawords}', ''), '0') AS UNSIGNED) * 4294967296) + CAST(COALESCE(NULLIF('%{Acct-Input-Octets}', ''), '0') AS UNSIGNED)) AS SIGNED) - CAST(st.bytes_in AS SIGNED)) \
+                      + IF(CAST(((CAST(COALESCE(NULLIF('%{Acct-Output-Gigawords}', ''), '0') AS UNSIGNED) * 4294967296) + CAST(COALESCE(NULLIF('%{Acct-Output-Octets}', ''), '0') AS UNSIGNED)) AS SIGNED) < CAST(st.bytes_out AS SIGNED), CAST(((CAST(COALESCE(NULLIF('%{Acct-Output-Gigawords}', ''), '0') AS UNSIGNED) * 4294967296) + CAST(COALESCE(NULLIF('%{Acct-Output-Octets}', ''), '0') AS UNSIGNED)) AS SIGNED), CAST(((CAST(COALESCE(NULLIF('%{Acct-Output-Gigawords}', ''), '0') AS UNSIGNED) * 4294967296) + CAST(COALESCE(NULLIF('%{Acct-Output-Octets}', ''), '0') AS UNSIGNED)) AS SIGNED) - CAST(st.bytes_out AS SIGNED)), \
                     NOW() \
                   FROM session_tracking st \
                   WHERE st.session_id = '%{Acct-Session-Id}' \
@@ -586,12 +585,7 @@ server default {
                                           LIMIT 1), 1, 0) \
                                     FROM radusagestats \
                                     WHERE username = '%{User-Name}' \
-                                    AND day >= (SELECT CASE \
-                                      WHEN up.quota_cycle_start_date IS NOT NULL THEN up.quota_cycle_start_date \
-                                      WHEN DAY(NOW()) >= up.quota_reset_day \
-                                        THEN DATE(CONCAT(YEAR(NOW()), '-', LPAD(MONTH(NOW()), 2, '0'), '-', LPAD(up.quota_reset_day, 2, '0'))) \
-                                      ELSE DATE(CONCAT(YEAR(DATE_SUB(NOW(), INTERVAL 1 MONTH)), '-', LPAD(MONTH(DATE_SUB(NOW(), INTERVAL 1 MONTH)), 2, '0'), '-', LPAD(up.quota_reset_day, 2, '0'))) \
-                                    END FROM raduserprofile up WHERE up.username = '%{User-Name}') }"
+                                    AND day >= fn_quota_cycle_start('%{User-Name}') }"
             }
 
             # Check if user has exceeded their daily quota (compare against default/original plan quota).

@@ -28,6 +28,9 @@ services:
       # Legacy: EXPIRY_* were used for captive / WISPr redirect. Default policy is Access-Reject when expired.
       EXPIRY_FRAMED_IP: ${EXPIRY_FRAMED_IP:-10.255.255.2}
       EXPIRY_REDIRECT_URL: ${EXPIRY_REDIRECT_URL:-http://127.0.0.1:5173/expired}
+
+      # Secret for the loopback-only healthcheck client (Status-Server probe).
+      HEALTHCHECK_SECRET: ${HEALTHCHECK_SECRET:-radius-healthcheck}
     volumes:
       - ./logs:/var/log/freeradius
     ports:
@@ -36,7 +39,11 @@ services:
       - "1700:1700/udp"
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "/usr/sbin/freeradius -C >/dev/null 2>&1"]
+      # Live Status-Server round-trip (the old `freeradius -C` only validated config,
+      # which passes even when the daemon isn't answering requests).
+      test: ["CMD", "/opt/freeradius/3.0/scripts/healthcheck.sh"]
       interval: 30s
       timeout: 10s
       retries: 3
+      # Allow time for the MySQL-readiness wait + schema bootstrap in start.sh.
+      start_period: 90s
