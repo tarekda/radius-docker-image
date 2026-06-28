@@ -4,7 +4,8 @@ server default {
         ipaddr = 0.0.0.0
         port = 1812
         limit {
-              max_connections = 16
+              # Raised from 16 — small value throttles auth under NAS retransmit bursts.
+              max_connections = 128
               lifetime = 0
               idle_timeout = 30
         }

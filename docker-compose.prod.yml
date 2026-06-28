@@ -1,0 +1,14 @@
+# Production overlay for standalone radius-docker-image compose.
+# Usage: docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+#
+# Differences from dev defaults:
+# - Named volume for logs (avoids Windows bind-mount permission issues)
+# - Does not publish ports differently; tune in your deployment stack as needed.
+
+services:
+  freeradius:
+    volumes:
+      - radiuspro_freeradius_logs:/var/log/freeradius
+
+volumes:
+  radiuspro_freeradius_logs:

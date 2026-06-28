@@ -1,9 +1,13 @@
 services:
   freeradius:
-    image: radius-docker-image-freeradius:latest
+    image: radius-docker-image-freeradius:5.0.0
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        IMAGE_VERSION: "5.0.0"
+        BUILD_DATE: ${BUILD_DATE:-}
+        VCS_REF: ${VCS_REF:-local}
     environment:
       # Set TZ so "00:00" matches your local time (set TZ in your shell/.env if needed)
       TZ: ${TZ:-Asia/Beirut}
@@ -20,8 +24,7 @@ services:
       # Debug / scheduled reset (defaults preserved)
       FREERADIUS_DEBUG: ${FREERADIUS_DEBUG:-0}
       DAILY_RESET_ENABLED: ${DAILY_RESET_ENABLED:-1}
-      # Force midnight local time (Asia/Beirut)
-      DAILY_RESET_AT: "00:00"
+      DAILY_RESET_AT: ${DAILY_RESET_AT:-00:00}
       # Logging for Grafana/Loki (writes /var/log/freeradius/{requests,replies,accounting}.log)
       RADIUS_REQUEST_LOG_ENABLED: ${RADIUS_REQUEST_LOG_ENABLED:-0}
 

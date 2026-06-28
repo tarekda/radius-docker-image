@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, master]
+    branches: [main, master, feat/*]
   pull_request:
 
 jobs:
@@ -17,9 +17,29 @@ jobs:
         run: shellcheck -S warning start.sh raddb/scripts/*.sh
 
   docker-build:
-    name: Docker image builds
+    name: Docker image builds and validates config
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Read version
+        id: version
+        run: echo "version=$(tr -d '\r\n' < VERSION)" >> "$GITHUB_OUTPUT"
       - name: Build image
-        run: docker build -t radius-docker-image-freeradius:ci .
+        run: |
+          docker build \
+            --build-arg IMAGE_VERSION="${{ steps.version.outputs.version }}" \
+            --build-arg BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --build-arg VCS_REF="${{ github.sha }}" \
+            -t radius-docker-image-freeradius:${{ steps.version.outputs.version }} \
+            -t radius-docker-image-freeradius:ci \
+            .
+      - name: Validate image contents (smoke test)
+        run: |
+          docker run --rm --entrypoint bash radius-docker-image-freeradius:ci -c '
+            set -e
+            grep -q "max_connections = 128" /etc/freeradius/3.0/sites-available/default
+            test -x /opt/freeradius/3.0/scripts/healthcheck.sh
+            test -x /start.sh
+            /usr/sbin/freeradius -v | grep -qi freeradius
+            echo "Image smoke test OK"
+          '

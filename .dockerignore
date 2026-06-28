@@ -1,0 +1,26 @@
+# Git and local secrets
+.git
+.gitignore
+.env
+.env.*
+!.env.example
+!env.example
+
+# Runtime logs (bind-mounted at run time; must not bloat build context)
+logs/
+*.log
+
+# Docs and CI (not needed in image)
+.github/
+docs/
+CHANGELOG.md
+README.md
+
+# Windows helpers
+scripts/
+
+# Editor / OS
+.editorconfig
+.gitattributes
+*.md
+!raddb/**

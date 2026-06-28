@@ -55,6 +55,9 @@ EOF
 
 write_mysql_defaults
 
+# rlm_sql reads $ENV{SQL_PASSWORD}; export after resolving file/secret sources.
+export SQL_PASSWORD="$(resolve_mysql_password)"
+
 # Allow FreeRADIUS exec scripts (run as freerad) to read DB creds.
 chown freerad:freerad "$MYSQL_DEFAULTS_FILE" >/dev/null 2>&1 || true
 chmod 600 "$MYSQL_DEFAULTS_FILE" >/dev/null 2>&1 || true
