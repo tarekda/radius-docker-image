@@ -1,7 +1,7 @@
 # Pin base OS for reproducible builds (update digest when patching Ubuntu).
 FROM ubuntu:22.04@sha256:ce941a2a18bbb922e434d6d6d2b31e571a5c3826eaf6ada0a41dcc905bd2d906
 
-ARG IMAGE_VERSION=5.0.0
+ARG IMAGE_VERSION=5.1.0
 ARG VCS_REF=unknown
 ARG BUILD_DATE=unknown
 
@@ -25,6 +25,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     iproute2 \
     tzdata \
     grep \
+    python3 \
     && rm -rf /var/lib/apt/lists/*
 
 # Ensure freerad user exists first
@@ -44,11 +45,11 @@ COPY raddb/dictionary.dailyquota /etc/freeradius/3.0/dictionary.dailyquota
 COPY raddb/dictionary.custom /etc/freeradius/3.0/dictionary.custom
 COPY raddb/scripts /opt/freeradius/3.0/scripts
 # Normalize Windows CRLF line endings (otherwise scripts fail with "/bin/bash^M: not found").
-RUN for f in /opt/freeradius/3.0/scripts/*.sh; do \
+RUN for f in /opt/freeradius/3.0/scripts/*.sh /opt/freeradius/3.0/scripts/*.py; do \
       [ -f "$f" ] || continue; \
       tr -d '\r' < "$f" > "${f}.tmp" && mv "${f}.tmp" "$f"; \
     done || true
-RUN chmod +x /opt/freeradius/3.0/scripts/*.sh || true
+RUN chmod +x /opt/freeradius/3.0/scripts/*.sh /opt/freeradius/3.0/scripts/*.py || true
 
 # Add includes to main dictionary
 RUN echo '$INCLUDE /etc/freeradius/3.0/dictionary.dailyquota' >> /etc/freeradius/3.0/dictionary && \
@@ -61,7 +62,8 @@ RUN ln -sf /etc/freeradius/3.0/mods-available/sql /etc/freeradius/3.0/mods-enabl
     ln -sf /etc/freeradius/3.0/mods-available/chap /etc/freeradius/3.0/mods-enabled/chap && \
     ln -sf /etc/freeradius/3.0/mods-available/mschap /etc/freeradius/3.0/mods-enabled/mschap && \
     ln -sf /etc/freeradius/3.0/mods-available/exec /etc/freeradius/3.0/mods-enabled/exec && \
-    ln -sf /etc/freeradius/3.0/mods-available/linelog /etc/freeradius/3.0/mods-enabled/linelog
+    ln -sf /etc/freeradius/3.0/mods-available/linelog /etc/freeradius/3.0/mods-enabled/linelog && \
+    ln -sf /etc/freeradius/3.0/sites-available/default /etc/freeradius/3.0/sites-enabled/default
 
 # Copy startup script
 COPY start.sh /start.sh
@@ -87,7 +89,7 @@ RUN mkdir -p /var/log/freeradius/radacct && \
 RUN mkdir -p /etc/freeradius/3.0/certs && \
     chown -R freerad:freerad /etc/freeradius/3.0/certs
 
-EXPOSE 1812/udp 1813/udp 1700/udp
+EXPOSE 1812/udp 1813/udp 1700/udp 9812/tcp
 
 # start.sh owns process lifecycle (MySQL wait, bootstrap, freeradius -f or -X).
 ENTRYPOINT ["/start.sh"]

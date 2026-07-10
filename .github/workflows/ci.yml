@@ -38,6 +38,8 @@ jobs:
           docker run --rm --entrypoint bash radius-docker-image-freeradius:ci -c '
             set -e
             grep -q "max_connections = 128" /etc/freeradius/3.0/sites-available/default
+            grep -q "max = 128" /etc/freeradius/3.0/mods-available/sql
+            test -f /opt/freeradius/3.0/scripts/radius_metrics_exporter.py
             test -x /opt/freeradius/3.0/scripts/healthcheck.sh
             test -x /start.sh
             /usr/sbin/freeradius -v | grep -qi freeradius

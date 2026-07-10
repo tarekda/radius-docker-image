@@ -1,11 +1,11 @@
 services:
   freeradius:
-    image: radius-docker-image-freeradius:5.0.0
+    image: radius-docker-image-freeradius:5.1.0
     build:
       context: .
       dockerfile: Dockerfile
       args:
-        IMAGE_VERSION: "5.0.0"
+        IMAGE_VERSION: "5.1.0"
         BUILD_DATE: ${BUILD_DATE:-}
         VCS_REF: ${VCS_REF:-local}
     environment:
@@ -34,12 +34,15 @@ services:
 
       # Secret for the loopback-only healthcheck client (Status-Server probe).
       HEALTHCHECK_SECRET: ${HEALTHCHECK_SECRET:-radius-healthcheck}
+      RADIUS_METRICS_ENABLED: ${RADIUS_METRICS_ENABLED:-1}
+      RADIUS_SQL_POOL_MAX: ${RADIUS_SQL_POOL_MAX:-128}
     volumes:
       - ./logs:/var/log/freeradius
     ports:
       - "1812:1812/udp"
       - "1813:1813/udp"
       - "1700:1700/udp"
+      - "9812:9812/tcp"
     restart: unless-stopped
     healthcheck:
       # Live Status-Server round-trip (the old `freeradius -C` only validated config,

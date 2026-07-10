@@ -32,6 +32,15 @@ server default {
         sql
         pap
 
+        # Reject usernames that could break SQL string literals in policy xlats.
+        # (FreeRADIUS 3.0 on Ubuntu does not expose %{sql_escape:...} as a usable xlat.)
+        if ((User-Name =~ /'/) || (User-Name =~ /;/) || (User-Name =~ /\\/)) {
+            update reply {
+                Reply-Message := "Invalid username"
+            }
+            reject
+        }
+
         # Request logging (for Grafana/Loki). Enable with RADIUS_REQUEST_LOG_ENABLED=1
         # NOTE: use $ENV{...} (config-time substitution). %{env:...} is not available as a core xlat here.
         if ("$ENV{RADIUS_REQUEST_LOG_ENABLED}" == "1") {

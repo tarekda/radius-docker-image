@@ -128,6 +128,13 @@ if [ "${DAILY_RESET_ENABLED:-1}" = "1" ]; then
   ) &
 fi
 
+# Prometheus metrics exporter (Status-Server -> :9812/metrics)
+if [ "${RADIUS_METRICS_ENABLED:-1}" = "1" ]; then
+  chmod +x /opt/freeradius/3.0/scripts/*.py >/dev/null 2>&1 || true
+  echo "Starting RADIUS metrics exporter on :${RADIUS_METRICS_PORT:-9812}"
+  python3 /opt/freeradius/3.0/scripts/radius_metrics_exporter.py &
+fi
+
 # Start FreeRADIUS.
 # - Default: foreground + log to stdout (so Promtail/Loki can collect logs)
 # - Debug: set FREERADIUS_DEBUG=1 to run verbose (-X)

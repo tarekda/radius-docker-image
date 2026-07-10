@@ -70,6 +70,8 @@ Docker runs `healthcheck.sh`: a **Status-Server** round-trip on `127.0.0.1:1812`
 - Monthly quota window: MySQL function `fn_quota_cycle_start(username)` — patched on container start via `bootstrap_schema.sh`.
 - Log purge: `sp_purge_old_logs` nightly (see `raddb/scripts/patch_log_retention.sql`).
 - Auth listener `max_connections` is **128** (raised from 16 for NAS retry bursts).
+- SQL module `pool.max` is **128** (must stay ≥ auth concurrency; was 25 and exhausted on reconnect storms).
+- Prometheus metrics on **:9812/metrics** (`RADIUS_METRICS_ENABLED=1`).
 
 ## Documentation
 

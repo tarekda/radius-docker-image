@@ -76,4 +76,5 @@ Keep bootstrap patches and backend migrations aligned when adding columns used b
 ## Capacity
 
 - Auth listener `max_connections = 128` (parallel in-flight auth requests per socket)
+- SQL `pool.max = 128` (aligned with auth concurrency; MySQL `max_connections` ≫ this)
 - Scale horizontally only with care: daily reset runs inside each replica unless externalized

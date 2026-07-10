@@ -17,14 +17,28 @@ sql {
     radius_db = "$ENV{SQL_DATABASE}"
     read_clients = yes 
     client_table = nas
-    # The authorize/accounting policies use several SQL xlats per packet.
-    # Keep this above normal auth/accounting burst concurrency or requests will queue
-    # in rlm_sql and NAS retransmits show up as "duplicate packet ... unfinished request".
-    # Make sure MySQL max_connections is comfortably higher than this value.
-    max_connections = 25
+    # Auth listener allows 128 in-flight requests; authorize does many SQL xlats per
+    # packet. Pool max must track that concurrency or you get:
+    #   rlm_sql (sql): Cannot open new connection, already at max
+    # (common after RADIUS rebuild when every NAS reconnects at once).
+    # MySQL max_connections (mysql/conf.d/my.cnf) must stay well above this.
+    pool {
+        start = 16
+        min = 8
+        max = 128
+        spare = 16
+        uses = 0
+        retry_delay = 30
+        lifetime = 0
+        idle_timeout = 60
+    }
     remove_stale_sessions = yes
     read_groups = no
     read_profiles = yes
+
+    # Characters allowed unescaped in SQL expansions. Anything else is escaped by rlm_sql
+    # when building queries (where supported by the driver path).
+    safe_characters = "@abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-_: /"
 
 
     # Username columns should share the same collation so MySQL can use indexes.

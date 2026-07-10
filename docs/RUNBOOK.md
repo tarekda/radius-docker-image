@@ -31,6 +31,8 @@ docker inspect --format='{{.State.Health.Status}}' <container_name>
 
 Healthy = Status-Server probe succeeded on loopback. Unhealthy after 90s start period usually means MySQL unreachable or FreeRADIUS failed to bind ports.
 
+Prometheus metrics (when `RADIUS_METRICS_ENABLED=1`): `http://<host>:9812/metrics` exposes `freeradius_up` and access/accounting counters from Status-Server.
+
 ### View logs
 
 ```powershell
@@ -73,6 +75,7 @@ Rollback: run previous image tag (e.g. `radiuspro-freeradius:4.x.x`).
 | Stuck **starting** health | MySQL slow or bootstrap slow | Increase `start_period`; check DB connectivity |
 | Auth works, acct missing | NAS not sending accounting | Enable acct on NAS; check 1813/udp |
 | Quota not resetting | Wrong `TZ` or `DAILY_RESET_AT` | Set `TZ`; confirm cron loop in logs |
+| Multi-replica double reset | Each container runs its own midnight job | Set `DAILY_RESET_ENABLED=0` on all but one replica (or move reset to a CronJob / backend scheduler) |
 | CoA disconnect fails | `proxy.conf` NAS IP/secret mismatch | Align with real NAS IP and secret |
 | High reject rate | Wrong secret, expired user, quota | Use backend auth failure logs / connection_logs |
 
@@ -81,7 +84,7 @@ Rollback: run previous image tag (e.g. `radiuspro-freeradius:4.x.x`).
 `freeradius -C` loads the SQL module and may require a reachable MySQL server on some builds. For a quick offline check:
 
 ```bash
-docker run --rm --entrypoint /usr/sbin/freeradius radius-docker-image-freeradius:5.0.0 -v
+docker run --rm --entrypoint /usr/sbin/freeradius radius-docker-image-freeradius:5.0.1 -v
 ```
 
 With MySQL available, pass `SQL_*` and `HEALTHCHECK_SECRET` env vars and run `-C`.
@@ -105,10 +108,21 @@ echo $?
 
 ---
 
+## Troubleshooting
+
+### `rlm_sql (sql): Cannot open new connection, already at max`
+
+SQL connection pool is saturated (auth/accounting burst > `pool.max` in `mods-available/sql`).
+
+1. Confirm pool size: `pool.max` should be ≥ auth listener `max_connections` (currently **128**).
+2. Confirm MySQL headroom: `SHOW VARIABLES LIKE 'max_connections';` and `SHOW STATUS LIKE 'Threads_connected';`.
+3. After a RADIUS rebuild/restart, expect a short reconnect storm — if errors persist beyond ~1–2 minutes, raise `pool.max` and rebuild.
+4. Slow authorize queries (quota/rate-limit SQL) hold sockets longer and amplify exhaustion under load.
+
 ## When to escalate
 
 - Repeated bootstrap failures for stored procedures (DB permissions / binlog)
-- MySQL connection pool exhaustion on RADIUS host
+- Persistent SQL pool exhaustion after raising `pool.max` / MySQL limits
 - Need for **multiple RADIUS replicas** (daily reset and CoA require design change)
 
 See [`ARCHITECTURE.md`](ARCHITECTURE.md) for component boundaries and schema ownership.

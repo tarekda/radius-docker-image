@@ -11,7 +11,7 @@ INSERT INTO nas (
     'mikrotik1',
     'other',
     0,
-    'tisp123',          -- Your shared secret
+    'REPLACE_WITH_NAS_SECRET',  -- Set via ops; never ship a real shared secret in git
     'MikroTik Test Router'
 );
 
