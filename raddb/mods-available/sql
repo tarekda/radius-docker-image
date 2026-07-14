@@ -51,6 +51,11 @@ sql {
 
     # Return Mikrotik-Rate-Limit based on the user's profile.
     # If the user is in fallback (or over quota), return the "Fallback" profile speed.
+    #
+    # MikroTik format (router POV: rx=upload, tx=download):
+    #   rx/tx [burst] [threshold] [time] [priority] [rx-rate-min/tx-rate-min]
+    # We keep existing speed_down/speed_up order, and set rate-min (limit-at / CIR) to 0/0
+    # so queues do not falsely guarantee every subscriber their full plan at once.
     authorize_reply_query = "SELECT up.id, \
                             up.username, 'Mikrotik-Rate-Limit' AS attribute, \
                             CONCAT( \
@@ -95,7 +100,7 @@ sql {
                                 THEN COALESCE(fb.speed_up, p.speed_up) \
                                 ELSE p.speed_up \
                               END), \
-                              'k' \
+                              'k 0/0 0/0 0/0 8 0/0' \
                             ) AS value, ':=' AS op \
                             FROM raduserprofile up \
                             JOIN radprofile p ON p.id = up.profile_id \

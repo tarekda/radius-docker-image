@@ -33,7 +33,7 @@ if [ -z "$SECRET" ]; then
 fi
 
 u_esc="$(sql_escape "$USERNAME")"
-RATE_LIMIT="$(get_one "SELECT CONCAT(p.speed_down,'k/',p.speed_up,'k') \
+RATE_LIMIT="$(get_one "SELECT CONCAT(p.speed_down,'k/',p.speed_up,'k 0/0 0/0 0/0 8 0/0') \
                        FROM raduserprofile up \
                        JOIN radprofile p ON p.id = up.profile_id \
                        WHERE up.username='${u_esc}' \

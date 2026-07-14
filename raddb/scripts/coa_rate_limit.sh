@@ -34,12 +34,11 @@ if [ -z "$SECRET" ]; then
   exit 0
 fi
 
-# Fallback rate string must match what you already send in Access-Accept.
-# Keep the same order as authorize_reply_query (speed_down/speed_up).
-RATE_LIMIT="$(get_one "SELECT CONCAT(speed_down,'k/',speed_up,'k') FROM radprofile WHERE profile_name='Fallback' LIMIT 1;")"
+# Fallback rate string must match authorize_reply_query (speed_down/speed_up + limit-at 0/0).
+RATE_LIMIT="$(get_one "SELECT CONCAT(speed_down,'k/',speed_up,'k 0/0 0/0 0/0 8 0/0') FROM radprofile WHERE profile_name='Fallback' LIMIT 1;")"
 if [ -z "$RATE_LIMIT" ]; then
-  echo "coa_rate_limit.sh: could not resolve Fallback rate from radprofile; using 2048k/2048k" >&2
-  RATE_LIMIT="2048k/2048k"
+  echo "coa_rate_limit.sh: could not resolve Fallback rate from radprofile; using 2048k/2048k with limit-at 0/0" >&2
+  RATE_LIMIT="2048k/2048k 0/0 0/0 0/0 8 0/0"
 fi
 
 PAYLOAD="User-Name = ${USERNAME}

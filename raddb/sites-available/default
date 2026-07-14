@@ -126,9 +126,9 @@ server default {
         }
 
         # Check for concurrent sessions (ignore stale sessions).
-        # A session is considered "active" only if it has an update within the last 10 minutes.
+        # A session is considered "active" only if it has an update within the last 2 minutes.
         # IMPORTANT: use >= so max_sessions=1 blocks a 2nd active session.
-        if ("%{sql:SELECT COUNT(*) FROM radacct WHERE username = '%{User-Name}' AND acctstoptime IS NULL AND COALESCE(acctupdatetime, acctstarttime) >= DATE_SUB(NOW(), INTERVAL 10 MINUTE)}" >= "%{sql:SELECT max_sessions FROM radprofile p JOIN raduserprofile up ON p.id = up.profile_id WHERE up.username = '%{User-Name}'}") {
+        if ("%{sql:SELECT COUNT(*) FROM radacct WHERE username = '%{User-Name}' AND acctstoptime IS NULL AND COALESCE(acctupdatetime, acctstarttime) >= DATE_SUB(NOW(), INTERVAL 2 MINUTE)}" >= "%{sql:SELECT max_sessions FROM radprofile p JOIN raduserprofile up ON p.id = up.profile_id WHERE up.username = '%{User-Name}'}") {
             update reply {
                 Reply-Message := "Too many concurrent sessions"
             }
@@ -638,8 +638,8 @@ server default {
             # Apply rate limit if user exceeded quota
             if (Tmp-Integer-0 == "1" || Tmp-Integer-1 == "1") {
                 update reply {
-                    # MikroTik format is "download/upload" in kbit/s (e.g., 1024k/512k)
-                    Mikrotik-Rate-Limit := "%{sql:SELECT CONCAT(speed_down, 'k/', speed_up, 'k') \
+                    # MikroTik: max-limit + limit-at=0/0 (no CIR guarantee)
+                    Mikrotik-Rate-Limit := "%{sql:SELECT CONCAT(speed_down, 'k/', speed_up, 'k 0/0 0/0 0/0 8 0/0') \
                                             FROM radprofile \
                                             WHERE profile_name = 'Fallback'}"
                 }
