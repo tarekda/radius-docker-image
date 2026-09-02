@@ -50,8 +50,56 @@ server default {
         "%{sql:insert into connection_logs (username, mac_address, nas_ip, status, reply_message, timestamp) values ('%{User-Name}', '%{Calling-Station-Id}', '%{NAS-IP-Address}', 'attempt', NULL, NOW());}"
         
         
-        # Block suspended / terminated / inactive (expired handled after auto-flip below).
-        if ("%{sql:SELECT CASE WHEN account_status IN ('suspended','terminated','inactive') THEN 1 ELSE 0 END FROM raduserprofile WHERE username = '%{User-Name}' LIMIT 1}" == 1) {
+        # Walled garden gate.
+        #
+        # Rejecting a suspended/expired user only makes their CPE redial
+        # forever, and the subscriber never learns why they are offline.
+        # Instead we can accept them into a quarantine that reaches nothing
+        # but the payment portal, which stops the redial loop and puts a
+        # "pay now" page in front of them. The router side keys off the
+        # Mikrotik-Address-List value below.
+        #
+        # The rollout gate lives in SQL, not here, so it can be widened or
+        # pulled back with one UPDATE - no image rebuild and no restart. It is
+        # keyed per status rather than globally, because 'expired' means the
+        # subscription lapsed and paying fixes it, while 'suspended' is an
+        # operator decision that a payment page will not resolve. Turning both
+        # on with one switch would quarantine 26 suspended accounts that are
+        # not even dialling.
+        #
+        #     UPDATE settings SET if_enabled=1 WHERE key_attribute='Walled-Garden-expired';
+        #     UPDATE settings SET if_enabled=1 WHERE key_attribute='Walled-Garden-suspended';
+        #
+        # walled_garden_users still works as a per-account override for anyone
+        # whose status is not switched on wholesale. 'terminated' and
+        # 'inactive' are excluded entirely and always get a hard reject.
+        #
+        # COALESCE keeps this to exactly one row even for unknown usernames;
+        # an empty expansion here would fail the update and abort authorize.
+        update request {
+            Tmp-Integer-8 := "%{sql:SELECT COALESCE(( \
+                                SELECT CASE WHEN up.account_status IN ('suspended','expired') \
+                                             AND (EXISTS (SELECT 1 FROM settings s \
+                                                           WHERE s.key_attribute = \
+                                                                 CONCAT('Walled-Garden-', up.account_status) \
+                                                             AND s.if_enabled = 1) \
+                                                  OR EXISTS (SELECT 1 FROM walled_garden_users w \
+                                                              WHERE w.username = up.username)) \
+                                            THEN 1 ELSE 0 END \
+                                  FROM raduserprofile up \
+                                 WHERE up.username = '%{User-Name}' LIMIT 1), 0)}"
+        }
+
+        if (&Tmp-Integer-8 == 1) {
+            update reply {
+                Mikrotik-Address-List := "expired"
+                Mikrotik-Rate-Limit := "2048k/2048k 0/0 0/0 0/0 8 0/0"
+            }
+        }
+
+        # Block suspended / terminated / inactive (expired handled after auto-flip below),
+        # unless the walled garden is taking this user instead.
+        if ("%{sql:SELECT CASE WHEN account_status IN ('suspended','terminated','inactive') THEN 1 ELSE 0 END FROM raduserprofile WHERE username = '%{User-Name}' LIMIT 1}" == 1 && &Tmp-Integer-8 != 1) {
             update reply {
                 Reply-Message := "Account is not active"
             }
@@ -65,8 +113,9 @@ server default {
               AND expires_at IS NOT NULL \
               AND expires_at < NOW()}"
 
-        # Same request: if expiry just flipped (or row was already expired), reject — do not allow login until renewed.
-        if ("%{sql:SELECT CASE WHEN account_status = 'expired' THEN 1 ELSE 0 END FROM raduserprofile WHERE username = '%{User-Name}' LIMIT 1}" == 1) {
+        # Same request: if expiry just flipped (or row was already expired), reject — do not allow login until renewed,
+        # unless the walled garden is taking this user instead.
+        if ("%{sql:SELECT CASE WHEN account_status = 'expired' THEN 1 ELSE 0 END FROM raduserprofile WHERE username = '%{User-Name}' LIMIT 1}" == 1 && &Tmp-Integer-8 != 1) {
             update reply {
                 Reply-Message := "Account expired. Contact your provider to renew."
             }
@@ -656,6 +705,13 @@ server default {
             }
         }
 
+        # An accounting section that ends in `noop` produces NO
+        # Accounting-Response, and every branch above can legitimately end
+        # that way (the Start branch only replies because it ends in `ok`).
+        # Without this the NAS never gets an answer to Interim-Update and
+        # retries until it gives up. A module returning `fail` still aborts
+        # the section before reaching here, so real errors stay unanswered.
+        ok
     }
 
     session {

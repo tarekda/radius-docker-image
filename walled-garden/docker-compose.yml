@@ -1,0 +1,27 @@
+# Kept as its own compose project, separate from the FreeRADIUS stack, so that
+# rebuilding or restarting either one can never disturb the other.
+#
+#   docker compose -f walled-garden/docker-compose.yml up -d
+
+services:
+  wg-redirect:
+    image: nginx:1.27-alpine
+    container_name: walled-garden-redirect
+    restart: unless-stopped
+    # Bound to one address on purpose. This host is multi-homed across a dozen
+    # interfaces, and publishing on 0.0.0.0 would expose a redirector on all of
+    # them. 172.8.16.4 is the only address the router dst-nats to.
+    ports:
+      - "172.8.16.4:80:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/_healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"

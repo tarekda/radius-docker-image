@@ -1,11 +1,11 @@
 services:
   freeradius:
-    image: radius-docker-image-freeradius:5.1.0
+    image: radius-docker-image-freeradius:5.1.3
     build:
       context: .
       dockerfile: Dockerfile
       args:
-        IMAGE_VERSION: "5.1.0"
+        IMAGE_VERSION: "5.1.3"
         BUILD_DATE: ${BUILD_DATE:-}
         VCS_REF: ${VCS_REF:-local}
     environment:

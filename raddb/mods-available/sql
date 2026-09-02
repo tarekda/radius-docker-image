@@ -47,7 +47,7 @@ sql {
        FROM radcheck rc \
        JOIN raduserprofile rup ON rc.username = rup.username \
        WHERE rc.username = '%{User-Name}' \
-       AND (rup.account_status = 'active' OR rup.account_status = 'suspended')"
+       AND rup.account_status IN ('active', 'suspended', 'expired')"
 
     # Return Mikrotik-Rate-Limit based on the user's profile.
     # If the user is in fallback (or over quota), return the "Fallback" profile speed.
